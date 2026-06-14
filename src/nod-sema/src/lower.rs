@@ -2518,7 +2518,11 @@ fn lower_module_full_inner(
                     &mut lift_sink,
                 ) {
                     Ok(method) => {
-                        methods.push(method.registration);
+                        // 0-param methods carry no registration: they are
+                        // plain direct-call functions, not dispatched generics.
+                        if let Some(reg) = method.registration {
+                            methods.push(reg);
+                        }
                         out.push(method.function);
                     }
                     Err(e) => errors.push(e),
@@ -4533,7 +4537,10 @@ fn build_slot_setter(
 
 struct LoweredMethod {
     function: Function,
-    registration: MethodRegistration,
+    /// `None` for a 0-parameter method: it is lowered as a plain
+    /// direct-call function (no dispatch), so there is nothing to
+    /// register in the generic-method table.
+    registration: Option<MethodRegistration>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4548,9 +4555,17 @@ fn lower_method_item(
     sink: &mut LiftSink,
 ) -> Result<LoweredMethod, LoweringError> {
     if params.is_empty() {
-        return Err(LoweringError::Unsupported {
-            span,
-            message: "define method requires at least one parameter".to_string(),
+        // A 0-parameter `define method` has no specialisable receiver,
+        // so it can't participate in generic dispatch. Dylan permits
+        // it; lower it as a plain direct-call function under its bare
+        // name (matching `define function`). `collect_top_level_names`
+        // registers 0-param methods in `top_names` so call sites emit a
+        // DirectCall, and `collect_generic_names` excludes them.
+        let function =
+            lower_function_inner(id, name, params, return_sig, body, span, ctx, sink)?;
+        return Ok(LoweredMethod {
+            function,
+            registration: None,
         });
     }
     // Sprint 13: collect ONE specialiser per required parameter. An
@@ -4591,7 +4606,7 @@ fn lower_method_item(
     };
     Ok(LoweredMethod {
         function,
-        registration,
+        registration: Some(registration),
     })
 }
 
@@ -5686,6 +5701,20 @@ fn collect_top_level_names(m: &Module, user_classes: &HashMap<String, ClassId>) 
                 fns.insert(name.clone(), ret);
                 fn_arity.insert(name.clone(), params.len());
             }
+            // A 0-parameter `define method` is lowered as a plain
+            // direct-call function (see `lower_method_item`), so it must
+            // be in `top_names` for call sites to emit a DirectCall.
+            // Methods WITH parameters stay dispatched generics and are
+            // intentionally not registered here.
+            Item::DefineMethod { name, params, return_, .. } if params.is_empty() => {
+                let ret = return_
+                    .as_ref()
+                    .and_then(|r| r.values.first().and_then(|v| v.type_.as_ref()))
+                    .map(|e| type_from_expr(Some(e)))
+                    .unwrap_or(TypeEstimate::Top);
+                fns.insert(name.clone(), ret);
+                fn_arity.insert(name.clone(), 0);
+            }
             // GAP-002 fix + GAP-004: `define constant` and
             // `define variable` are both lowered as zero-arg "getter"
             // functions whose body returns the initial / current value.
@@ -5782,7 +5811,10 @@ fn collect_generic_names(m: &Module) -> HashSet<String> {
             Item::DefineGeneric { name, .. } => {
                 out.insert(name.clone());
             }
-            Item::DefineMethod { name, .. } => {
+            // A 0-parameter method is a plain direct-call function, not a
+            // dispatched generic — keep it out of the generic set so a
+            // bareword/`\name` reference doesn't route through Dispatch.
+            Item::DefineMethod { name, params, .. } if !params.is_empty() => {
                 out.insert(name.clone());
             }
             Item::DefineClass { name, .. } => {
