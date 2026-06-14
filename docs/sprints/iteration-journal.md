@@ -21,6 +21,25 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 
 *(newest first)*
 
+### 2026-06-14 — Iteration 6: definition-macro recursive span rewrite — `tak`'s macros fully expand
+
+- **Blocker:** the definition-macro shortcut (lexing the expansion with the
+  call-site file id) broke RECURSIVE expansion of a body-macro *inside* the
+  produced item — a `benchmark-repeat` call inside the `define benchmark`-produced
+  function re-lexed the wrong tokens (its span pointed into the expansion buffer).
+- **Fix (`nod-macro`):** `expand_definition_macro` now uses a scratch `SourceMap`
+  and an origins-based `rewrite_spans_item` (mirroring `expand_one`), so the
+  produced item's spans map to the real source and recursive body-macro expansion
+  re-lexes correctly. Added `walk_item_spans` (reusing the existing
+  `walk_stmt_spans`/`walk_expr_spans`).
+- **Result:** `tak.dylan`'s macro layer **fully expands** — `define benchmark` →
+  function, `benchmark-repeat` → its body, `assert-equal` resolves. The error
+  moves to a **back-end lowering gap**: `` `local method` not lowered `` (the
+  `trtak` method uses a `local method`) — no longer a macro/parse issue. The
+  synthetic `define benchmark` still builds + runs; in-tree fixtures 55/55.
+- **Next:** lower `local method` (back-end) — blocks `tak`/`trtak` and several
+  other gabriel files; then a real benchmark file should compile end-to-end.
+
 ### 2026-06-14 — Iteration 5: testworks-compat stdlib helpers + matcher nested-`end` fix
 
 - **Demand:** real gabriel benchmarks (`tak.dylan`) call `benchmark-repeat

@@ -1682,7 +1682,18 @@ fn expand_definition_macro(
     // override never routes this internal expansion through the partial Dylan
     // parser; seed the known macro names so body-shaped macro calls in the body
     // still parse.
-    let toks = lex(&out.text, sp.file_id);
+    let mut scratch = SourceMap::new();
+    let scratch_id = scratch
+        .add(
+            std::path::PathBuf::from(format!("<macro-expand:{}>", def.name)),
+            out.text.clone(),
+        )
+        .map_err(|e_| MacroError::ReparseFailed {
+            call_span: sp,
+            name: def.name.clone(),
+            detail: format!("source map: {e_}"),
+        })?;
+    let toks = lex(&out.text, scratch_id);
     let known: std::collections::HashSet<String> = ctx.table.defs.keys().cloned().collect();
     let module = nod_reader::parse_module_with_macros_rust(&out.text, &toks, None, &known).map_err(
         |ds| MacroError::ReparseFailed {
@@ -1695,7 +1706,7 @@ fn expand_definition_macro(
                 .unwrap_or_else(|| "definition-macro expansion did not parse".into()),
         },
     )?;
-    module
+    let mut item = module
         .items
         .into_iter()
         .next()
@@ -1703,7 +1714,12 @@ fn expand_definition_macro(
             call_span: sp,
             name: def.name.clone(),
             detail: "definition-macro expansion produced no item".into(),
-        })
+        })?;
+    // Rewrite the produced item's scratch spans to their origins so RECURSIVE
+    // expansion (which re-lexes call sites by span) reads the real source —
+    // e.g. a `benchmark-repeat` call inside a `define benchmark` body.
+    rewrite_spans_item(&mut item, &out.origins, scratch_id, sp);
+    Ok(item)
 }
 
 fn set_top_span(e: &mut Expr, sp: Span) {
@@ -1851,6 +1867,63 @@ fn rewrite_spans_expr(
         }
     };
     walk_expr_spans(e, &mut |sp| map(sp));
+}
+
+/// Rewrite scratch-buffer spans in a produced definition-macro item to their
+/// origins (or `fallback`). Mirrors [`rewrite_spans_expr`] for items so
+/// recursive body-macro expansion inside the produced item re-lexes the real
+/// source.
+fn rewrite_spans_item(it: &mut Item, origins: &[TokenOrigin], scratch_id: FileId, fallback: Span) {
+    let map = |sp: &mut Span| {
+        if sp.file_id != scratch_id {
+            return;
+        }
+        if let Some(o) = origins
+            .iter()
+            .find(|o| o.buf_lo <= sp.lo && sp.hi <= o.buf_hi)
+        {
+            *sp = o.original_span;
+            return;
+        }
+        let lo_origin = origins.iter().find(|o| o.buf_lo <= sp.lo && sp.lo < o.buf_hi);
+        let hi_origin = origins
+            .iter()
+            .find(|o| sp.hi > o.buf_lo && sp.hi <= o.buf_hi)
+            .or_else(|| origins.iter().filter(|o| o.buf_hi <= sp.hi).max_by_key(|o| o.buf_hi));
+        match (lo_origin, hi_origin) {
+            (Some(lo), Some(hi))
+                if lo.original_span.file_id == hi.original_span.file_id
+                    && lo.original_span.lo <= hi.original_span.hi =>
+            {
+                *sp = Span::new(
+                    lo.original_span.file_id,
+                    lo.original_span.lo,
+                    hi.original_span.hi,
+                );
+            }
+            (Some(lo), Some(_)) => *sp = lo.original_span,
+            (Some(lo), _) => *sp = lo.original_span,
+            _ => *sp = fallback,
+        }
+    };
+    walk_item_spans(it, &mut |sp| map(sp));
+}
+
+fn walk_item_spans(it: &mut Item, f: &mut dyn FnMut(&mut Span)) {
+    match it {
+        Item::DefineFunction { span, params, body, .. }
+        | Item::DefineMethod { span, params, body, .. } => {
+            f(span);
+            for p in params {
+                walk_param_spans(p, f);
+            }
+            for s in body {
+                walk_stmt_spans(s, f);
+            }
+        }
+        Item::Expr(e) => walk_expr_spans(e, f),
+        _ => {}
+    }
 }
 
 fn walk_expr_spans(e: &mut Expr, f: &mut dyn FnMut(&mut Span)) {
