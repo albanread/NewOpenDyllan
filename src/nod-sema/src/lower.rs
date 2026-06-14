@@ -4717,13 +4717,25 @@ fn lower_function_inner_keyed(
         let pty = type_from_expr(p.type_.as_ref());
         let t = b.fresh_temp(pty);
         b.func.params.push(t);
+        // Adjective params (`#key x`, `#rest r`, `#next nm`) bind the
+        // bare identifier, not the marker-prefixed string. A pure marker
+        // (`#all-keys`) binds nothing — we still push a param temp to
+        // keep the ABI arity in step with the parser's param count, but
+        // skip the env insert. Keyword arguments are passed positionally
+        // (matching how `make` / generic dispatch treat them at the call
+        // site), so a `#key` param reads its value through the ordinary
+        // positional slot.
+        let Some(bind_name) = param_binding_name(&p.name) else {
+            continue;
+        };
+        let bind_name = bind_name.to_string();
         // Sprint 24: if this param is itself captured by an inner
         // closure, promote it to a cell so the inner closure (which
         // accesses it through the env) and the outer scope see the
         // same storage. The cell-promoted name maps to the cell-Word
-        // in `env`; subsequent reads/writes of `p.name` go through
+        // in `env`; subsequent reads/writes of `bind_name` go through
         // `%cell-get` / `%cell-set!`.
-        if b.cell_ctx.cell_locals.contains(&p.name) {
+        if b.cell_ctx.cell_locals.contains(&bind_name) {
             let cell = b.fresh_temp(TypeEstimate::Top);
             b.push(Computation::DirectCall {
                 dst: cell,
@@ -4731,9 +4743,9 @@ fn lower_function_inner_keyed(
                 args: vec![t],
                 safepoint_roots: Vec::new(), is_no_alloc: false,
             });
-            env.insert(p.name.clone(), cell);
+            env.insert(bind_name, cell);
         } else {
-            env.insert(p.name.clone(), t);
+            env.insert(bind_name, t);
         }
     }
 
@@ -5137,6 +5149,32 @@ impl LiftSink {
     }
 }
 
+/// The bare binding name introduced by a parameter, with any leading
+/// adjective marker (`#key `, `#rest `, `#next `) stripped.
+///
+/// The loose param parser stores adjective params as `"#key x"` /
+/// `"#rest r"` / `"#next nm"` (the marker plus a space plus the bound
+/// identifier), and pure markers like `"#all-keys"` with no following
+/// identifier. Every place that treats a parameter as a *binding* — the
+/// lift pre-pass (which records in-scope names so body references resolve
+/// to the param rather than being mis-classified as captures) and the
+/// body lowerer (which inserts the name into the local env) — must use the
+/// bare identifier, not the marker-prefixed string. Returns `None` for a
+/// pure marker (`#all-keys`) that binds nothing.
+fn param_binding_name(name: &str) -> Option<&str> {
+    for marker in ["#key ", "#rest ", "#next "] {
+        if let Some(rest) = name.strip_prefix(marker) {
+            let bare = rest.trim();
+            return if bare.is_empty() { None } else { Some(bare) };
+        }
+    }
+    if name.starts_with('#') {
+        // Pure marker (`#all-keys`) — binds nothing.
+        return None;
+    }
+    Some(name)
+}
+
 // ─── Sprint 21 / 24: anonymous-method lifting pre-pass ────────────────────
 //
 // Walks every Item's body, every Expr nested inside, and replaces
@@ -5322,7 +5360,9 @@ fn lift_item(item: &mut Item, st: &mut LiftState<'_>) {
                 enclosing_fn: name.clone(),
             };
             for p in params.iter() {
-                scope.in_scope.insert(p.name.clone());
+                if let Some(b) = param_binding_name(&p.name) {
+                    scope.in_scope.insert(b.to_string());
+                }
             }
             for s in body.iter_mut() {
                 lift_statement(s, &mut scope, st);
@@ -5397,7 +5437,9 @@ fn lift_statement(
                 // names) is a capture.
                 let mut inner_scope: HashSet<String> = st.top.clone();
                 for p in m.params.iter() {
-                    inner_scope.insert(p.name.clone());
+                    if let Some(b) = param_binding_name(&p.name) {
+                        inner_scope.insert(b.to_string());
+                    }
                 }
                 let mut free_seq: Vec<(Span, String)> = Vec::new();
                 for sub in m.body.iter() {
@@ -5595,7 +5637,9 @@ fn lift_expr(
             // erred out here.
             let mut inner_scope: HashSet<String> = st.top.clone();
             for p in params.iter() {
-                inner_scope.insert(p.name.clone());
+                if let Some(b) = param_binding_name(&p.name) {
+                    inner_scope.insert(b.to_string());
+                }
             }
             let mut free_seq: Vec<(Span, String)> = Vec::new();
             for sub in body.iter() {
@@ -5772,7 +5816,9 @@ fn check_free_vars(
             // method's scope is what we want — same outer_scope).
             let mut nested_inner = inner_scope.clone();
             for p in params {
-                nested_inner.insert(p.name.clone());
+                if let Some(b) = param_binding_name(&p.name) {
+                    nested_inner.insert(b.to_string());
+                }
             }
             for sub in body {
                 check_free_vars(sub, &mut nested_inner, outer_scope, top, free);
@@ -7104,6 +7150,16 @@ impl FunctionBuilder {
         env: &mut LocalEnv,
         ctx: &LowerCtx,
     ) -> Result<TempId, LoweringError> {
+        // See through parentheses around the callee. The parser keeps the
+        // grouping node (`Expr::Paren`) for `(method (...) ... end)(args)`,
+        // `(foo)(args)`, etc. Without unwrapping it here the callee would
+        // never match the `Expr::Ident` / computed-callee paths below and
+        // every parenthesised callee fell through to the "non-ident callee"
+        // error. Unwrap iteratively in case of redundant nesting.
+        let mut callee = callee;
+        while let Expr::Paren { inner, .. } = callee {
+            callee = inner.as_ref();
+        }
         // `instance?(v, <class>)` intrinsic.
         if let Expr::Ident(_, name) = callee
             && name == "instance?"
@@ -7322,63 +7378,14 @@ impl FunctionBuilder {
         // env-variable, `lower_expr` already inserts the `%cell-get` /
         // `%env-cell` indirection. We route through the regular
         // `lower_expr` to get the unwrapped function Word.
-        let callee_name: Option<&str> = match callee {
-            Expr::Ident(_, n) => Some(n.as_str()),
-            _ => None,
-        };
-        let captured_in_env = match (self.cell_ctx.env_captures.as_ref(), callee_name) {
-            (Some(ec), Some(n)) => ec.index_of.contains_key(n),
-            _ => false,
-        };
-        if let Expr::Ident(_, name) = callee
-            && (env.contains_key(name) || captured_in_env)
-            && !ctx.top_names.contains(name)
-            && !ctx.generics.contains(name)
-        {
-            let f = self.lower_expr(callee, env, ctx)?;
-            let arg_temps: Vec<TempId> = args
-                .iter()
-                .map(|a| self.lower_expr(a, env, ctx))
-                .collect::<Result<_, _>>()?;
-            // Sprint 26: arities 0..=5 dispatch through the direct
-            // `nod_funcall_N` trampolines. Higher arities still need
-            // `nod_apply` and are surfaced as a "not yet supported" so
-            // the lowerer doesn't silently SOV-pack without the caller
-            // opting in. `<exit-procedure>` is always arity 1 at the
-            // source level; the arity-0 path skips the exit-procedure
-            // shortcut inside `nod_funcall0` deliberately.
-            let funcall_sym = match arg_temps.len() {
-                0 => "nod_funcall0",
-                1 => "nod_funcall1",
-                2 => "nod_funcall2",
-                3 => "nod_funcall3",
-                4 => "nod_funcall4",
-                5 => "nod_funcall5",
-                n => {
-                    return Err(LoweringError::Unsupported {
-                        span,
-                        message: format!(
-                            "calling a local <function>/<exit-procedure> binding `{name}` with arity {n} not supported (cap is 5 direct args); use `apply(f, args)` for higher arities"
-                        ),
-                    });
-                }
-            };
-            let mut call_args = Vec::with_capacity(arg_temps.len() + 1);
-            call_args.push(f);
-            call_args.extend(arg_temps);
-            let dst = self.fresh_temp(TypeEstimate::Top);
-            self.push(Computation::DirectCall {
-                dst,
-                callee: funcall_sym.to_string(),
-                args: call_args,
-                safepoint_roots: Vec::new(), is_no_alloc: false,
-            });
-            return Ok(dst);
-        }
         // Strip kw-arg wrapper for non-make calls (the parser wraps
         // `name: value` arguments as Call(%kw-arg, [Symbol, Value]).
         // For Sprint 12 we treat them as positional values for direct
         // calls. Generic dispatch + make have their own kw handling.
+        // Computed-callee funcalls (`(method (#key x) x end)(x: 1)`,
+        // `methods[0](y: 1)`) and local-binding funcalls also use this
+        // positional view — keyword values are threaded into the same
+        // positional slots the `#key` params bind from.
         let mut positional_args: Vec<&Expr> = Vec::with_capacity(args.len());
         for a in args {
             if let Expr::Call { callee: c, args: kwargs, .. } = a
@@ -7390,6 +7397,63 @@ impl FunctionBuilder {
             } else {
                 positional_args.push(a);
             }
+        }
+        let callee_name: Option<&str> = match callee {
+            Expr::Ident(_, n) => Some(n.as_str()),
+            _ => None,
+        };
+        let captured_in_env = match (self.cell_ctx.env_captures.as_ref(), callee_name) {
+            (Some(ec), Some(n)) => ec.index_of.contains_key(n),
+            _ => false,
+        };
+        // Local-binding funcall: an env-bound `<function>` /
+        // `<exit-procedure>` Word called by name.
+        if let Expr::Ident(_, name) = callee
+            && (env.contains_key(name) || captured_in_env)
+            && !ctx.top_names.contains(name)
+            && !ctx.generics.contains(name)
+        {
+            let f = self.lower_expr(callee, env, ctx)?;
+            let arg_temps: Vec<TempId> = positional_args
+                .iter()
+                .map(|a| self.lower_expr(a, env, ctx))
+                .collect::<Result<_, _>>()?;
+            return self.emit_funcall(f, arg_temps, span, Some(name));
+        }
+        // Computed-callee funcall: the callee is an arbitrary expression
+        // that evaluates to a `<function>` Word — a directly-called
+        // method literal (lifted to `(__anon-method-N)` after the lift
+        // pre-pass, possibly with captures so it must go through the
+        // closure Word rather than a direct call), or an indexing /
+        // call expression like `methods[0]` / `table[k]`. Lower the
+        // callee to its Word and route through the `nod_funcall_N`
+        // trampoline. Keyword arguments are already folded into
+        // `positional_args` above, so this handles both the plain and
+        // keyword-argument forms uniformly.
+        let route_through_funcall = match callee {
+            Expr::Ident(_, name) => {
+                // A lifted closure WITH captures must be created via
+                // `%make-closure` (which `lower_expr` does) and invoked
+                // through the funcall trampoline; a direct call by name
+                // would drop the environment. Capture-free lifted
+                // methods and ordinary top-level / generic idents fall
+                // through to the existing DirectCall / Dispatch paths.
+                ctx.closures
+                    .and_then(|reg| reg.closure_for(name))
+                    .map(|info| !info.captured.is_empty())
+                    .unwrap_or(false)
+            }
+            // Any non-ident callee (after Paren-unwrapping) is a computed
+            // function value.
+            _ => true,
+        };
+        if route_through_funcall {
+            let f = self.lower_expr(callee, env, ctx)?;
+            let arg_temps: Vec<TempId> = positional_args
+                .iter()
+                .map(|a| self.lower_expr(a, env, ctx))
+                .collect::<Result<_, _>>()?;
+            return self.emit_funcall(f, arg_temps, span, callee_name);
         }
         let arg_temps: Vec<TempId> = positional_args
             .iter()
@@ -7523,11 +7587,65 @@ impl FunctionBuilder {
             });
             Ok(dst)
         } else {
-            Err(LoweringError::Unsupported {
-                span,
-                message: "call against a non-ident callee not lowered in Sprint 06".to_string(),
-            })
+            // Unreachable in practice: every non-ident callee is routed
+            // through the computed-callee funcall path above (which lowers
+            // the callee to a `<function>` Word and dispatches via
+            // `nod_funcall_N`). Kept as a defensive funcall fallback so a
+            // future callee shape can't silently regress to a hard error.
+            let f = self.lower_expr(callee, env, ctx)?;
+            self.emit_funcall(f, arg_temps, span, None)
         }
+    }
+
+    /// Emit a call through the `nod_funcall_N` trampoline against an
+    /// already-lowered function Word `f` with the given positional
+    /// argument temps. Shared by the local-binding funcall path and the
+    /// computed-callee funcall path. `callee_desc` is an optional name
+    /// used only to make the over-arity diagnostic readable.
+    fn emit_funcall(
+        &mut self,
+        f: TempId,
+        arg_temps: Vec<TempId>,
+        span: Span,
+        callee_desc: Option<&str>,
+    ) -> Result<TempId, LoweringError> {
+        // Arities 0..=5 dispatch through the direct `nod_funcall_N`
+        // trampolines. Higher arities still need `nod_apply`; surface a
+        // "not yet supported" so the lowerer doesn't silently SOV-pack
+        // without the caller opting in. `<exit-procedure>` is always
+        // arity 1 at the source level; the arity-0 path skips the
+        // exit-procedure shortcut inside `nod_funcall0` deliberately.
+        let funcall_sym = match arg_temps.len() {
+            0 => "nod_funcall0",
+            1 => "nod_funcall1",
+            2 => "nod_funcall2",
+            3 => "nod_funcall3",
+            4 => "nod_funcall4",
+            5 => "nod_funcall5",
+            n => {
+                let what = callee_desc
+                    .map(|d| format!("`{d}`"))
+                    .unwrap_or_else(|| "a computed function value".to_string());
+                return Err(LoweringError::Unsupported {
+                    span,
+                    message: format!(
+                        "calling {what} with arity {n} not supported (cap is 5 direct args); use `apply(f, args)` for higher arities"
+                    ),
+                });
+            }
+        };
+        let mut call_args = Vec::with_capacity(arg_temps.len() + 1);
+        call_args.push(f);
+        call_args.extend(arg_temps);
+        let dst = self.fresh_temp(TypeEstimate::Top);
+        self.push(Computation::DirectCall {
+            dst,
+            callee: funcall_sym.to_string(),
+            args: call_args,
+            safepoint_roots: Vec::new(),
+            is_no_alloc: false,
+        });
+        Ok(dst)
     }
 
     fn lower_make(

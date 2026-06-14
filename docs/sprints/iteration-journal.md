@@ -21,6 +21,43 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 
 *(newest first)*
 
+### 2026-06-14 — Iteration 11: `#key` params + computed-callee calls (agent B, kept); agents A & C reverted
+
+Spun up three worktree agents (user: "use agents to assist"); reviewed each by
+building + RUNNING executables on clean `main` (NOT trusting self-reports). Only
+one held up.
+
+- **KEPT — agent B (`src/nod-sema/src/lower.rs`):** lowers (1) `#key`/`#rest`/
+  `#next` params (previously never bound — `define function f (a, #key b) a + b
+  end` failed to lower on baseline); (2) computed/curried callees (`adder(10)(5)`);
+  (3) keyword args threaded through the funcall path. **Verified on main:**
+  `f(3, b: 4)`→7, `f(a: 10, b: 20)`→30, `adder(10)(5)`→15, positional add→6.
+  Guards: in-tree 55/55, nod-sema 37/37, smoke-aot 4/4, eval=2, corpus 55→55 (no
+  regression). Remaining clean-failing gaps: `#rest` arg *collection* (LLVM arity
+  error — binding works, varargs collection unimplemented) and an immediately-
+  called method literal with a keyword arg (`(method (#key x) x end)(x: 7)` →
+  "unknown callee"). **0 corpus gain** (the pattern isn't in the corpus) but a real
+  foundational compiler improvement (keyword params are core Dylan). Dropped B's
+  `Cargo.toml` link change (see LNK2005 note below).
+- **REVERTED — agent A (`test` macro):** used `?opts:parameter-list` to match
+  testworks option heads, but `(description: "x")` is a keyword *property list*, not
+  a parameter list, so the parser never hands it to the macro — a no-op for the real
+  cases. Its "prints 42 / 24→13" claims did not reproduce on clean main. The real
+  fix needs PARSER support for property-list heads in definition-macro calls.
+- **REVERTED — agent C (func-refs/classes):** honestly reverted its class part, but
+  the Part-1 func-ref program (`\==`/`instance?` as values) crashes on clean main
+  with the same iteration-10 error (`no registered ==`) — the shims still aren't
+  live in the AOT EXE. Its `/FORCE:MULTIPLE` link flag addressed a cold-build
+  LNK2005 (real — see below) but is the wrong instrument. "1,1,1,0 verified" did not
+  reproduce.
+
+**Lesson reinforced:** agents are reliable for pure-Dylan stdlib and (re-verifiable)
+lowering, but NOT for AOT/runtime/parser internals — their worktree build+run checks
+don't reproduce on a clean main build. Re-verify every agent change by building +
+running on main; do the delicate AOT/parser fixes directly. (Two independent agents
+hit a cold-build LNK2005 their warm-`main` reviewer does not — logged in
+known-limitations.)
+
 ### 2026-06-14 — Iteration 10: REVERTED — agent's runtime change was AOT-broken; new AOT guard
 
 - **Attempt (agent, worktree):** resolve `instance?`/`==`/`~=` as first-class
