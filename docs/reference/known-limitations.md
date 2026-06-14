@@ -200,6 +200,28 @@ or a standing design trade-off are kept here.
   `src/nod-sema/src/lower.rs`).
 * **Status**: open.
 
+## Pre-existing failures in the oracle / parser-parity nod-tests suites
+
+* **Symptom**: a full `cargo test -p nod-tests` run shows failures in
+  `c3_oracle` (`c3_linearisation_matches_rust_reference`), `lexer_oracle`
+  (`oracle_factorial`/`oracle_hello`), and `dylan_parse_translate`
+  (`dylan_parser_translation_gate` — divergence on `dylan-c3.dylan` /
+  `dylan-lexer.dylan`, around character-literal and `#:` parsing). These are
+  **pre-existing** (present at the import commit / session start) and are NOT
+  covered by the working regression guard (the 55 in-tree fixtures via
+  `dump-ast`/`dump-dfm` on both parser paths, `tools/smoke-aot.sh`, and the
+  `nod-runtime`/`nod-sema` unit suites + the functional `nod-tests` suites —
+  classes/collections/tables/conditions/closures/first-class-functions/byte-string,
+  which all pass).
+* **Nature**: these compare the Dylan-parser shim against the Rust reference
+  parser, or against checked-in oracle snapshots, on the compiler's OWN sources —
+  they are sensitive to long-standing parser-parity gaps (char literals, `#:`
+  symbols) and stale snapshots, not to feature work.
+* **Planned fix**: regenerate the lexer/c3 oracle snapshots and close the
+  Dylan-vs-Rust parser-parity gaps on character literals / `#:`; then re-enable
+  them as part of the guard. Tracked separately from corpus iteration.
+* **Status**: open (pre-existing; not a regression from the 2026-06 iterations).
+
 ## Notes
 
 * A live Sprint 60 corpus + improvement backlog (ranked) is recorded in

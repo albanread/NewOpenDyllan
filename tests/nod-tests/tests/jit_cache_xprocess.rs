@@ -240,13 +240,13 @@ fn manifest_version_constant_is_one() {
 }
 
 #[test]
-fn runtime_abi_version_is_two_after_sprint38_bump() {
-    // Sprint 37 shipped at ABI v1. Sprint 38's named-global codegen
-    // path is a load-bearing IR shape change, so the constant bumped
-    // to 2 — Sprint 37 cache entries (baked-address-as-i64) won't
-    // match a Sprint 38 codegen output's cache key. This is the
-    // documented breaking change.
-    assert_eq!(nod_llvm::NOD_RUNTIME_ABI_VERSION, 2);
+fn runtime_abi_version_matches_constant() {
+    // The cache key embeds NOD_RUNTIME_ABI_VERSION so stale entries from an
+    // older codegen IR shape can't be reused. v1 (Sprint 37) → v2 (Sprint 38's
+    // named-global path) → v3 (current). This test just pins that the constant
+    // is the value the cache machinery was validated against; bump in lockstep
+    // when a codegen IR-shape change forces a new ABI.
+    assert_eq!(nod_llvm::NOD_RUNTIME_ABI_VERSION, 3);
 }
 
 #[test]
