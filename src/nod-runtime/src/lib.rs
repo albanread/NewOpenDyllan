@@ -184,7 +184,7 @@ pub use callbacks::{
 };
 pub use conditions::{
     BlockFns, HandlerFn, HandlerFrame, MAX_BLOCK_CAPTURED, NlxPayload, _reset_block_registry_for_tests,
-    _reset_handler_stack_for_tests, allocate_block_id, condition_class_id, condition_class_name,
+    _reset_handler_stack_for_tests, condition_class_id, condition_class_name,
     condition_message, error_class_id, ensure_registered as ensure_conditions_registered,
     exit_procedure_block_id, exit_procedure_class_id, for_each_handler, handler_stack_snapshot,
     handlers_report, invoke_restart, make_exit_procedure, make_no_applicable_methods_error,

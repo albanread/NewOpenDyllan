@@ -117,7 +117,10 @@ thread_local! {
 }
 
 pub fn active_jit_safepoint_depth() -> usize {
-    ACTIVE_JIT_SAFEPOINTS.with(|stack| stack.borrow().len())
+    // `try_borrow` so the panic / crash-dump hook can read this without
+    // double-panicking if the unwind fired while a `borrow_mut` was live
+    // on this thread (reports 0 in that pathological case).
+    ACTIVE_JIT_SAFEPOINTS.with(|stack| stack.try_borrow().map(|s| s.len()).unwrap_or(0))
 }
 
 pub fn truncate_active_jit_safepoints(depth: usize) {

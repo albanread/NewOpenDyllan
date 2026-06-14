@@ -371,9 +371,38 @@ fn registered_aot_safepoint_count() -> usize {
 }
 
 /// Number of AOT safepoint frames currently active on this thread.
-/// Used by the crash dump handler (which runs on the faulting thread).
-pub(crate) fn active_aot_safepoint_depth() -> usize {
-    ACTIVE_AOT_SAFEPOINTS.with(|stack| stack.borrow().len())
+/// Used by the crash dump handler (which runs on the faulting thread)
+/// and by `conditions::nod_run_block` to capture/restore a baseline
+/// across a non-local exit.
+///
+/// Uses `try_borrow` so the panic / crash-dump hook can read it without
+/// double-panicking if the unwind happened to fire while a `borrow_mut`
+/// was live on this thread — in that pathological case we report 0
+/// rather than re-entering a panic.
+pub fn active_aot_safepoint_depth() -> usize {
+    ACTIVE_AOT_SAFEPOINTS.with(|stack| stack.try_borrow().map(|s| s.len()).unwrap_or(0))
+}
+
+/// BUG 1 fix: truncate the thread-local *AOT* active-safepoint stack to
+/// `depth`, mirroring `stack_map::truncate_active_jit_safepoints`.
+///
+/// A `block (return) … return(x) … end` non-local exit unwinds via
+/// `panic_any(NlxPayload)` through AOT Dylan frames that never reach
+/// their `nod_aot_end_safepoint` epilogues, leaving stale entries on
+/// `ACTIVE_AOT_SAFEPOINTS`. The unconditional fast-path asserts in
+/// `verify_aot_safepoint` / `end_aot_safepoint` (NOT gated on verify
+/// mode) would then crash on the next safepoint. `nod_run_block`
+/// captures the depth at entry and truncates back to it on the
+/// NLX-into-this-block arm and in its cleanup guard's `Drop`, exactly
+/// symmetric with the JIT truncate. In a pure-JIT process the AOT depth
+/// is always 0, so this is a no-op there.
+pub fn truncate_active_aot_safepoints(depth: usize) {
+    ACTIVE_AOT_SAFEPOINTS.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        if stack.len() > depth {
+            stack.truncate(depth);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -459,8 +488,24 @@ fn begin_aot_safepoint(
     }
 }
 
+// BUG 2 fix: these three AOT safepoint shims are `extern "C-unwind"`,
+// NOT `extern "C"`. A `block (return) … return(x) … end` non-local exit
+// is transported via `panic_any(NlxPayload)`, which unwinds through the
+// AOT Dylan frames that wrap their calls in begin/verify/end safepoint
+// pairs. If these shims were `extern "C"` (nounwind), a panic crossing
+// them would abort the process with "panic in a function that cannot
+// unwind", masking the real control-flow event. `C-unwind` lets the
+// unwind transit cleanly.
+//
+// The LLVM-side declarations (`get_or_declare_aot_{begin,verify,end}_safepoint`
+// in nod-llvm/src/codegen.rs) call `add_function(SYMBOL, ty, None)` with
+// NO function attributes (no `nounwind`), so the emitted symbol name and
+// C calling convention are byte-identical to what `extern "C"` produced.
+// `C-unwind` changes only whether unwinding may legally cross the
+// boundary — not the ABI or the symbol — so this is link-compatible with
+// every previously-built object.
 #[unsafe(no_mangle)]
-pub extern "C" fn nod_aot_begin_safepoint(
+pub extern "C-unwind" fn nod_aot_begin_safepoint(
     site_id: u64,
     expected_root_count: u64,
     slot_base: *mut crate::word::Word,
@@ -511,8 +556,11 @@ fn verify_aot_safepoint(site_id: u64) {
     }
 }
 
+// BUG 2 fix: `extern "C-unwind"` so an NLX panic can transit. See the
+// note on `nod_aot_begin_safepoint` — the LLVM declaration is
+// attribute-free, so the ABI/symbol is unchanged.
 #[unsafe(no_mangle)]
-pub extern "C" fn nod_aot_verify_safepoint(site_id: u64) {
+pub extern "C-unwind" fn nod_aot_verify_safepoint(site_id: u64) {
     verify_aot_safepoint(site_id);
 }
 
@@ -580,8 +628,11 @@ fn end_aot_safepoint(site_id: u64) {
     }
 }
 
+// BUG 2 fix: `extern "C-unwind"` so an NLX panic can transit. See the
+// note on `nod_aot_begin_safepoint` — the LLVM declaration is
+// attribute-free, so the ABI/symbol is unchanged.
 #[unsafe(no_mangle)]
-pub extern "C" fn nod_aot_end_safepoint(site_id: u64) {
+pub extern "C-unwind" fn nod_aot_end_safepoint(site_id: u64) {
     end_aot_safepoint(site_id);
 }
 

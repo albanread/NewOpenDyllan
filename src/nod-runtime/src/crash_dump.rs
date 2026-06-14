@@ -482,6 +482,20 @@ fn install_panic_hook() {
     // prints the message + optional backtrace).
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // A successful `block (return) … return(x) … end` non-local exit
+        // is implemented as `panic_any(NlxPayload)` and is *control
+        // flow*, not a crash. The enclosing `nod_run_block` catches it.
+        // Suppress the crash dump (and the chained default hook) for it
+        // so a working block/return doesn't spew a diagnostic to stderr.
+        // A genuine unhandled `error("boom")` carries a `<simple-error>`
+        // condition (not an `NlxPayload`), so it still crash-dumps.
+        if info
+            .payload()
+            .downcast_ref::<crate::conditions::NlxPayload>()
+            .is_some()
+        {
+            return;
+        }
         // Build a one-line summary from panic location.
         let mut context = StackBuf::<1024>::new();
         use core::fmt::Write as _;

@@ -1390,8 +1390,8 @@ fn looks_like_win32_export(name: &str) -> bool {
 /// take an additional leading `condition` arg).
 #[derive(Clone, Debug)]
 pub struct BlockRegistration {
-    /// Runtime-allocated id (via `nod_runtime::allocate_block_id`).
-    /// Baked into the call site as a `WordBits` constant.
+    /// Deterministic id derived from `(parent_name, thunk_seq)` at
+    /// lowering time. Baked into the call site as a `WordBits` constant.
     pub block_id: u64,
     pub body_fn_name: String,
     pub cleanup_fn_name: Option<String>,
@@ -9667,15 +9667,18 @@ fn lower_block_form(
     let thunk_seq = sink.alloc_thunk_suffix();
     // Sprint 37: deterministic block_id derived from (parent_name,
     // thunk_seq). Identical source must produce identical DFM IR for the
-    // JIT object-code cache to hit; a process-global counter via
-    // `allocate_block_id` would change across runs. The id is registered
+    // JIT object-code cache to hit; a process-global counter would change
+    // across runs. The id is registered
     // post-JIT with `register_block_fns`, which replaces same-id entries,
     // so collisions across modules are tolerated. The hash is SipHash 1-3
     // via `DefaultHasher`, which has fixed seeds — stable across runs.
-    // The id must fit in 63 bits because `make_exit_procedure` packs it
-    // into a tagged fixnum (see `Word::from_fixnum`), and must be
-    // non-zero because 0 is the "no block" sentinel — we OR in bit 62
-    // to satisfy both constraints with high collision-resistance.
+    // The id must fit in the tagged-fixnum domain because
+    // `make_exit_procedure` packs it via `Word::from_fixnum` (which
+    // panics on overflow). The fixnum domain is [-2^62, 2^62-1], so a
+    // *non-negative* id must be strictly less than 2^62. We mask to 61
+    // bits then OR in bit 61, giving the range [2^61, 2^62-1]: non-zero
+    // (0 is the "no block" sentinel) AND inside the fixnum domain, with
+    // high collision-resistance.
     let block_id = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -9683,9 +9686,10 @@ fn lower_block_form(
         thunk_seq.hash(&mut h);
         b"sprint37-block-id".hash(&mut h);
         let raw = h.finish();
-        // Mask to 62 bits then set bit 62; gives a non-zero value
-        // strictly less than 2^63, fitting `Word::from_fixnum`'s domain.
-        (raw & ((1u64 << 62) - 1)) | (1u64 << 62)
+        // Mask to 61 bits then set bit 61; gives a non-zero value in
+        // [2^61, 2^62-1], fitting `Word::from_fixnum`'s domain
+        // (FIXNUM_MAX = 2^62-1).
+        (raw & ((1u64 << 61) - 1)) | (1u64 << 61)
     };
 
     // ─── Lift each stage to a top-level function ────────────────────

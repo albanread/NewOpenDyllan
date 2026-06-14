@@ -49,13 +49,13 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use crate::classes::{
     ClassId, ClassMetadata, SlotDefault, SlotInfo, SlotType, class_metadata_for, is_subclass,
 };
 use crate::make::rust_make;
+use crate::aot::{active_aot_safepoint_depth, truncate_active_aot_safepoints};
 use crate::stack_map::{active_jit_safepoint_depth, truncate_active_jit_safepoints};
 use crate::word::Word;
 
@@ -635,17 +635,6 @@ pub fn _reset_block_registry_for_tests() {
     g.clear();
 }
 
-// ─── Block-id minting ──────────────────────────────────────────────────────
-
-static NEXT_BLOCK_ID: AtomicU64 = AtomicU64::new(1);
-
-/// Mint a fresh process-global block id. Used by the lowering pass when
-/// it encounters a `block` form. Ids start at 1 so 0 can serve as a
-/// "no block" sentinel.
-pub fn allocate_block_id() -> u64 {
-    NEXT_BLOCK_ID.fetch_add(1, Ordering::Relaxed)
-}
-
 // ─── nod_run_block orchestration ───────────────────────────────────────────
 //
 // Signature for the body / cleanup / afterwards / handler thunks:
@@ -678,6 +667,13 @@ struct CleanupGuard {
     /// (NLX to an outer block, or non-NLX panic) clears stale entries
     /// from dead JIT stack frames before the cleanup thunk runs.
     jit_safepoint_baseline: usize,
+    /// BUG 1 fix: the parallel AOT active-safepoint depth at entry. An
+    /// NLX unwinding through AOT Dylan frames skips their
+    /// `nod_aot_end_safepoint` epilogues, leaving stale entries on
+    /// `aot::ACTIVE_AOT_SAFEPOINTS`; we truncate back to this baseline
+    /// symmetrically with `jit_safepoint_baseline`. No-op in a pure-JIT
+    /// process (AOT depth is 0 there).
+    aot_safepoint_baseline: usize,
 }
 
 impl Drop for CleanupGuard {
@@ -686,6 +682,10 @@ impl Drop for CleanupGuard {
         // allocate, which can trigger GC.  At this point the JIT body
         // frames are gone, so their safepoint entries are stale.
         truncate_active_jit_safepoints(self.jit_safepoint_baseline);
+        // BUG 1 fix: same for the parallel AOT active-safepoint stack —
+        // an NLX unwinding through AOT frames left their begin-safepoint
+        // entries dangling. No-op in a pure-JIT process.
+        truncate_active_aot_safepoints(self.aot_safepoint_baseline);
         // Restore the handler-stack baseline; a re-raised panic must not
         // leave dangling frames pointing at this (defunct) block_id.
         truncate_handler_stack(self.handler_stack_baseline);
@@ -744,6 +744,10 @@ pub unsafe extern "C-unwind" fn nod_run_block(
     let captured = [c0, c1, c2, c3, c4, c5, c6, c7];
     let baseline = handler_stack_len();
     let jit_safepoint_baseline = active_jit_safepoint_depth();
+    // BUG 1 fix: capture the parallel AOT active-safepoint depth so an
+    // NLX into (or through) this block can trim stale AOT entries left
+    // by frames that skipped their `nod_aot_end_safepoint` epilogues.
+    let aot_safepoint_baseline = active_aot_safepoint_depth();
 
     // Make the captured locals visible to any `nod_signal` invoked
     // inside the body or a handler — they need the same locals to run
@@ -784,6 +788,7 @@ pub unsafe extern "C-unwind" fn nod_run_block(
         done: false,
         handler_stack_baseline: baseline,
         jit_safepoint_baseline,
+        aot_safepoint_baseline,
     };
 
     let body: ThunkFn = unsafe { std::mem::transmute(fns.body) };
@@ -799,6 +804,10 @@ pub unsafe extern "C-unwind" fn nod_run_block(
         Err(payload) => match downcast_nlx(payload) {
             Ok(nlx) if nlx.target_block_id == block_id => {
                 truncate_active_jit_safepoints(jit_safepoint_baseline);
+                // BUG 1 fix: trim stale AOT safepoint entries from the
+                // dead Dylan frames the NLX unwound through. No-op in a
+                // pure-JIT process.
+                truncate_active_aot_safepoints(aot_safepoint_baseline);
                 // NLX into this block. The handler (if a signal drove
                 // us here) already produced `nlx.value` — return it.
                 nlx.value.raw()
