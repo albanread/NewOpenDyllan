@@ -2784,61 +2784,83 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Keywords that open an `end`-terminated block in a statement/expression
+    /// body — kernel control-flow plus the stdlib's body-shaped macros. Used by
+    /// [`Self::skip_body_to_matching_end`] to balance nested `end`s.
+    fn is_block_opener_kw(w: &str) -> bool {
+        matches!(
+            w,
+            "if" | "for"
+                | "while"
+                | "until"
+                | "case"
+                | "select"
+                | "begin"
+                | "block"
+                | "unless"
+                | "when"
+                | "cond"
+                | "iterate"
+                | "method"
+                | "for-each"
+                | "with-cleanup"
+                | "dynamic-bind"
+                | "repeat"
+        )
+    }
+
     /// Advance to the `KwEnd` that closes the current define-form.
-    /// `KwEnd` followed by a *body-form keyword* (`if`, `for`, `while`, …)
-    /// belongs to a nested form; we step past it. The matching end is the
-    /// one followed by either the form's own keyword (`form_kw`), `;`, the
-    /// form's name, EOF, or directly by another `define`.
-    fn skip_body_to_matching_end(&mut self, form_kw: &str) {
-        let mut depth: i32 = 0;
+    ///
+    /// The body of an unknown `define`-macro (e.g. testworks `define test` /
+    /// `define suite`) can contain arbitrarily nested end-terminated blocks
+    /// (`if`/`for`/`while`/`begin`/`block`/`method`/…), each of which closes
+    /// with `end` — frequently a *bare* `end;` with no keyword echo. We track
+    /// block-nesting depth: a block-opening keyword at grouping-depth 0 pushes a
+    /// level and each `end` pops one; the `end` seen at depth 0 is the one that
+    /// terminates the define-form. `end` tokens inside `( )` / `[ ]` / `{ }`
+    /// (e.g. literal `end`s in a macro rule) are grouping content, never block
+    /// terminators.
+    fn skip_body_to_matching_end(&mut self, _form_kw: &str) {
+        let mut pdepth: i32 = 0; // () [] {} grouping depth
+        let mut bdepth: i32 = 0; // nested end-terminated block depth
         while !self.at_end() {
             match self.peek_kind() {
                 TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace
                 | TokenKind::HashLParen | TokenKind::HashLBracket | TokenKind::HashLBrace => {
-                    depth += 1;
+                    pdepth += 1;
                     self.bump();
                 }
                 TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace => {
-                    if depth > 0 {
-                        depth -= 1;
+                    if pdepth > 0 {
+                        pdepth -= 1;
                     }
                     self.bump();
                 }
-                TokenKind::KwEnd if depth == 0 => {
-                    // Is this `end` followed by a nested-form keyword?
-                    let save = self.pos;
-                    self.bump();
-                    let next = self.peek();
-                    let next_word = if next.kind == TokenKind::Ident {
-                        Some(self.token_text(next).to_string())
-                    } else {
-                        None
-                    };
-                    let is_nested = match next_word.as_deref() {
-                        Some(w) => matches!(
-                            w,
-                            "if" | "for"
-                                | "while"
-                                | "until"
-                                | "case"
-                                | "cond"   // Sprint 49b: stdlib macro, body-shaped, end-terminated
-                                | "select"
-                                | "begin"
-                                | "block"
-                                | "unless"
-                                | "method"
-                                | "iterate"
-                        ) && w != form_kw,
-                        None => false,
-                    };
-                    if is_nested {
-                        // Eat the nested-form keyword and keep going.
+                TokenKind::KwEnd => {
+                    if pdepth > 0 {
+                        // literal `end` inside a grouping (e.g. a macro rule)
                         self.bump();
-                        continue;
+                    } else if bdepth > 0 {
+                        // closes a nested block
+                        bdepth -= 1;
+                        self.bump();
+                        // skip an optional `end <keyword>` echo so the echoed
+                        // keyword isn't re-counted as a fresh block opener
+                        if matches!(self.peek_kind(), TokenKind::Ident)
+                            && Self::is_block_opener_kw(self.token_text(self.peek()))
+                        {
+                            self.bump();
+                        }
+                    } else {
+                        // depth 0: this `end` terminates the define-form
+                        return;
                     }
-                    // Otherwise this end terminates the define. Roll back.
-                    self.pos = save;
-                    return;
+                }
+                TokenKind::Ident if pdepth == 0 => {
+                    if Self::is_block_opener_kw(self.token_text(self.peek())) {
+                        bdepth += 1;
+                    }
+                    self.bump();
                 }
                 _ => {
                     self.bump();

@@ -20,7 +20,7 @@ For every `.dylan` file in the language/stdlib suites
 | Stage | Result | Notes |
 |------|--------|-------|
 | **Lex** | **161 / 161** | The lexer handles all real OpenDylan source. |
-| **Parse** (`dump-ast`, lenient) | **101 / 161 (63%)** | The standalone parser accepts most real Dylan syntax. |
+| **Parse** (`dump-ast`, lenient) | **118 / 161 (73%)** | The standalone parser accepts most real Dylan syntax (was 101 before the body-skip fix below). |
 | **Full compile** (`dump-dfm`/`build`) | **0 real tests** | Blocked before codegen for every real test/benchmark. |
 
 So: we can **read** the corpus, we can **parse** most of it, but we cannot yet
@@ -60,19 +60,23 @@ applicable as a full compile" until they land**. The benchmarks come closest
 
 ## Parser gaps (actionable now)
 
-Of the 60 `dump-ast` failures, the causes cluster tightly. These are concrete,
+Of the `dump-ast` failures (60 originally; 43 after the body-skip fix in #1
+below), the causes cluster tightly. These are concrete,
 self-contained parser fixes (all in `src/nod-reader/src/parser.rs` unless noted)
 that are valuable independent of the library/testworks work — and several also
 turn a hard *parse wall* into a clean fall-through. Ranked by files unlocked:
 
-1. **Bare nested `end` in an unknown `define`-macro body (~30 files).** Unknown
+1. ✅ **Fixed — bare nested `end` in an unknown `define`-macro body.** Unknown
    define-words (testworks `define test`/`suite`/`benchmark`) route to
-   `parse_define_other` → `skip_body_to_matching_end`, which only treats a
-   nested `end` as nested when followed by a known keyword (`end if`, `end for`,
-   …). A bare `end;` (the normal close of `for`/`if`/`block`/`let … if … end`)
-   is misread as the form terminator, closing it early → the real `end test;`
-   dangles as `unexpected token KwEnd`. Fix: track block-open depth (or fully
-   recurse) instead of the keyword-peek heuristic.
+   `parse_define_other` → `skip_body_to_matching_end`, which only treated a
+   nested `end` as nested when followed by a known keyword (`end if`). A bare
+   `end;` (the normal close of `for`/`if`/`block`) was misread as the form
+   terminator, closing it early → the real `end test;` dangled as `unexpected
+   token KwEnd`. Replaced the keyword-peek heuristic with real block-depth
+   tracking (block-opener keyword pushes, `end` pops; depth-0 `end` terminates).
+   Corpus parse 101 → 118; `KwEnd` failures 43 → 22 (the rest are nested
+   *body-macro* calls not yet in the block-opener set, e.g. testworks
+   `with-test-unit`).
 2. **Body-shaped macro calls not recognized (~9 files).** The expr/statement
    dispatch hardcodes `if/begin/let/.../while/until/block`; body-shaped macros
    (`unless`, `when`, `with-open-file`, `dynamic-bind`, …) only parse if seeded.
@@ -100,7 +104,8 @@ turn a hard *parse wall* into a clean fall-through. Ranked by files unlocked:
 9. **`.=hash` operator-named slot access (1).** `x.=hash` lexes as `=` + `hash`.
    Fix in the lexer (operator-shaped names) or dot-access.
 
-Estimated: fix #1 alone recovers ~27–30 files; #1+#2+#3 cover ~41 of the 60.
+Done so far: #1 (body-skip) recovered +17 (parse 101 → 118). The remaining
+gaps #2–#9 cover most of the 43 residual failures.
 
 ## Cross-cutting robustness issue
 
