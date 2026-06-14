@@ -12,7 +12,7 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 59 / 161 | … → 55 → 58 (`for`) → 59 (func-refs) |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 60 / 161 | … → 58 (`for`) → 59 (func-refs) → 60 (select/case) |
 | OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
@@ -20,6 +20,42 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 ## Iterations
 
 *(newest first)*
+
+### 2026-06-15 — Iteration 15: stdlib strings + select/case + collection classes (3 parallel agents)
+
+Three agents in parallel worktrees (disjoint files), each build+run-verified by me on
+main before merge.
+
+- **strings** (`stdlib/strings.dylan`, +18 ops): case-mapping, predicates, trim,
+  `string-position`/`count-substrings`/`replace-substrings`, `repeat-string`,
+  `string-reverse`, `string-to-integer`, `split`/`join`, `string-equal?` — pure-Dylan
+  over `%byte-string-*`. Verified by running. **Gap surfaced:** `<character>` lowers
+  to a raw i32 (not a tagged fixnum), so char↔code ops are blocked on a future
+  `%char-code`/`%code-char` primitive — char-typed predicate overloads deferred.
+- **select / case** (`nod-reader/src/parser.rs`): these were **dead parser surface** —
+  `Expr::Case` was parsed but never lowered ("expression form `case` not lowered").
+  Now desugared to the kernel `if`-tree IN THE PARSER (AOT-safe): full arity (no cap),
+  comma-separated multi-value arms (a dropped-value bug fixed), `by` test, `otherwise`,
+  empty consequents → `#f`, `select` key evaluated exactly once. Verified by running.
+  **Corpus 59 → 60** (`gabriel/boyer` via `case`).
+- **collection classes** (`stdlib/arrays.dylan` + nod-runtime/lower/codegen):
+  `<array>`/`<vector>`/`<simple-vector>`/`<byte-vector>`/`<bit-vector>` registered as
+  **pure-Dylan `define class`** (the AOT-safe `<stream>` route — no class-id drift);
+  **`instance?` CPL-walk fix** (new `ClassCheck::VectorOrUserClass`: SOV fast path OR
+  CPL walk, so `instance?(bitvector, <vector>)` is correct); and a **working
+  `<bit-vector>`** (`bitvectors.rs`: packed 60-bit-word store, `make` redirect in
+  `lower_make`, `element`/`size`/`set-bits!`/`unset-bits!`/`bit-count` + word bitwise
+  primitives `logand/logior/logxor/lognot/ash`). Verified by running: instance? cases
+  + `make(<bit-vector>, size: 10)` set/count = 3, multi-word `size: 130` = 130.
+  **Deferred (Phase B):** `bit-vector-and/or/xor/andc2` (multi-value, pad keywords),
+  variadic `vector(...)`, `limited(...)`, packed `<byte-vector>`.
+- **Regression fixed:** the iter-14 block-return work deleted
+  `nod_runtime::allocate_block_id`, but `tests/nod-tests/tests/conditions.rs` still
+  imported it → the nod-tests crate didn't compile (I'd missed it: I ran
+  `-p nod-runtime`, not `-p nod-tests`). Replaced with a test-local counter.
+- **Recheck:** in-tree 55/55 on BOTH the shim and `--parse-with-rust` paths (shim
+  re-baked via self-rebuild for the new classes), smoke-aot 6/6, nod-runtime 147/0
+  (+3 bit-vector tests), nod-sema 44/0, nod-tests conditions 9/0, corpus 60/161.
 
 ### 2026-06-14 — Iteration 14: AOT levers — LNK2005 gate + block-return + func-refs
 

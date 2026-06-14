@@ -26,12 +26,23 @@ use nod_reader::{SourceMap, lex, parse_module, scan_preamble};
 use nod_runtime::{
     BlockFns, ClassId, HandlerFn, Word, _reset_block_registry_for_tests,
     _reset_dispatch_for_tests, _reset_handler_stack_for_tests, add_method_full,
-    allocate_block_id, class_metadata_for, condition_class_name, condition_message,
+    class_metadata_for, condition_class_name, condition_message,
     ensure_conditions_registered, error_class_id, find_class_id_by_name,
     get_or_create_generic, handler_stack_snapshot, handlers_report, intern_string_literal,
     make_simple_error, make_simple_warning, nod_dispatch, nod_run_block, register_block_fns,
     rust_make, simple_error_class_id, try_byte_string, warning_class_id,
 };
+
+// `nod_runtime::allocate_block_id` was removed when block ids became
+// deterministic SipHash-derived values computed in `nod-sema/lower.rs` (the
+// block-return fix). These runtime-level tests only need DISTINCT ids to key the
+// per-block registry, so a process-local counter stands in for the old runtime
+// allocator without re-introducing a production symbol.
+fn allocate_block_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 // Test scaffolding.
