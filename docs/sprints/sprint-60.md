@@ -84,6 +84,17 @@ precedence. Make the stdlib correct under the DRM rule and retire the crutch.
 and evaluate correctly under flat DRM precedence; regression tests cover the
 fixed shapes.
 
+**Status — done.** `stdlib.dylan` and `win32-constants.dylan` are pragma-free.
+The precedence-sensitive expressions were the 13 character-class predicates
+(`ascii-digit?`, `ascii-hex-digit?`, `ascii-bin-digit?`, `ascii-oct-digit?`,
+`ascii-uppercase?`, `ascii-lowercase?`, `ascii-alpha?`, `ascii-alphanumeric?`,
+`ascii-whitespace?`) plus the `as-uppercase` / `as-lowercase` range checks; each
+comparison is now explicitly parenthesized. Verified behaviour-preserving:
+`dump-ast` of the parenthesized, pragma-free source is byte-identical (function
+bodies) to the original C-precedence AST, and JIT `eval` of every predicate
+returns correct results. `win32-constants.dylan` had no precedence-sensitive
+expressions (proven by an identical AST), so only the pragma was removed.
+
 ## 4. Continue to improve the compiler
 
 **Objective.** Steady forward progress on correctness and capability across the

@@ -1,6 +1,5 @@
 Module: dylan
-Precedence: c
-Author: NewOpenDylan stdlib (Sprint 20b)
+Author: NewOpenDylan stdlib
 
 // ╔══════════════════════════════════════════════════════════════════════════╗
 // ║ STDLIB + MACRO BOUNDARY POLICY                                           ║
@@ -367,7 +366,7 @@ define method as-uppercase (s :: <byte-string>) => (out :: <byte-string>)
   let i = 0;
   until (i = n)
     let b = %byte-string-element(s, i);
-    let upper = if (b >= 97 & b <= 122)  // 'a'..'z'
+    let upper = if ((b >= 97) & (b <= 122))  // 'a'..'z'
                   b - 32                  // shift to 'A'..'Z' (65..90)
                 else
                   b
@@ -384,7 +383,7 @@ define method as-lowercase (s :: <byte-string>) => (out :: <byte-string>)
   let i = 0;
   until (i = n)
     let b = %byte-string-element(s, i);
-    let lower = if (b >= 65 & b <= 90)   // 'A'..'Z'
+    let lower = if ((b >= 65) & (b <= 90))   // 'A'..'Z'
                   b + 32                  // shift to 'a'..'z' (97..122)
                 else
                   b
@@ -409,43 +408,43 @@ end method;
 // twins on `<character>` without renaming churn.
 
 define function ascii-digit? (b :: <integer>) => (yes? :: <boolean>)
-  b >= 48 & b <= 57           // '0'..'9'
+  (b >= 48) & (b <= 57)           // '0'..'9'
 end function;
 
 define function ascii-hex-digit? (b :: <integer>) => (yes? :: <boolean>)
-  (b >= 48 & b <= 57)         // '0'..'9'
-    | (b >= 65 & b <= 70)     // 'A'..'F'
-    | (b >= 97 & b <= 102)    // 'a'..'f'
+  ((b >= 48) & (b <= 57))         // '0'..'9'
+    | ((b >= 65) & (b <= 70))     // 'A'..'F'
+    | ((b >= 97) & (b <= 102))    // 'a'..'f'
 end function;
 
 define function ascii-bin-digit? (b :: <integer>) => (yes? :: <boolean>)
-  b = 48 | b = 49             // '0' | '1'
+  (b = 48) | (b = 49)             // '0' | '1'
 end function;
 
 define function ascii-oct-digit? (b :: <integer>) => (yes? :: <boolean>)
-  b >= 48 & b <= 55           // '0'..'7'
+  (b >= 48) & (b <= 55)           // '0'..'7'
 end function;
 
 define function ascii-uppercase? (b :: <integer>) => (yes? :: <boolean>)
-  b >= 65 & b <= 90           // 'A'..'Z'
+  (b >= 65) & (b <= 90)           // 'A'..'Z'
 end function;
 
 define function ascii-lowercase? (b :: <integer>) => (yes? :: <boolean>)
-  b >= 97 & b <= 122          // 'a'..'z'
+  (b >= 97) & (b <= 122)          // 'a'..'z'
 end function;
 
 define function ascii-alpha? (b :: <integer>) => (yes? :: <boolean>)
-  (b >= 65 & b <= 90) | (b >= 97 & b <= 122)
+  ((b >= 65) & (b <= 90)) | ((b >= 97) & (b <= 122))
 end function;
 
 define function ascii-alphanumeric? (b :: <integer>) => (yes? :: <boolean>)
-  (b >= 48 & b <= 57) | (b >= 65 & b <= 90) | (b >= 97 & b <= 122)
+  ((b >= 48) & (b <= 57)) | ((b >= 65) & (b <= 90)) | ((b >= 97) & (b <= 122))
 end function;
 
 // Standard ASCII whitespace: space, tab, LF, CR, FF. Matches the C
 // `isspace` set minus VT (which Dylan source never uses meaningfully).
 define function ascii-whitespace? (b :: <integer>) => (yes? :: <boolean>)
-  b = 32 | b = 9 | b = 10 | b = 13 | b = 12
+  (b = 32) | (b = 9) | (b = 10) | (b = 13) | (b = 12)
 end function;
 
 // ─── for-each macro ────────────────────────────────────────────────────────
