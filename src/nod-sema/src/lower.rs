@@ -4743,6 +4743,11 @@ fn lower_function_inner_keyed(
 
     let last_idx = body.len().saturating_sub(1);
     let mut final_temp: Option<TempId> = None;
+    // Move the caller's lift sink into the builder for the duration of
+    // the body loop so block forms reachable only through `lower_expr`
+    // (a `block … end` in EXPRESSION position) share the same sink and
+    // fn-id counter. Restored to `sink` after the loop.
+    b.pending_sink = Some(std::mem::take(sink));
     for (i, stmt) in body.iter().enumerate() {
         let is_last = i == last_idx;
         match stmt {
@@ -4750,8 +4755,8 @@ fn lower_function_inner_keyed(
                 // Flatten `Statement::Expr(Expr::Stmt(Statement::Block {...}))` —
                 // produced when a body-shaped macro (e.g. `with-cleanup`) expands
                 // to a block form.  The macro re-parser always returns an Expr, so
-                // the block gets double-wrapped.  We unwrap it here where `sink` is
-                // in scope so `lower_block_form` can lift the body thunk.
+                // the block gets double-wrapped.  We unwrap it here so
+                // `lower_block_form` can lift the body thunk.
                 if let Expr::Stmt(inner) = e {
                     if let Statement::Block {
                         span,
@@ -4762,13 +4767,10 @@ fn lower_function_inner_keyed(
                         afterwards,
                     } = inner.as_ref()
                     {
-                        let t = lower_block_form(
-                            &mut b,
-                            sink,
+                        let t = b.lower_block_in_expr(
                             &mut env,
                             ctx,
                             *span,
-                            name,
                             exit_var.as_deref(),
                             blk_body,
                             handlers,
@@ -4917,13 +4919,10 @@ fn lower_function_inner_keyed(
                 // Sprint 19: lower `block ... exception ... cleanup ...
                 // end` via lifted thunks + a runtime `nod_run_block`
                 // call. See `docs/CONDITIONS.md` for the design.
-                let t = lower_block_form(
-                    &mut b,
-                    sink,
+                let t = b.lower_block_in_expr(
                     &mut env,
                     ctx,
                     *span,
-                    name,
                     exit_var.as_deref(),
                     blk_body,
                     handlers,
@@ -4935,6 +4934,10 @@ fn lower_function_inner_keyed(
                 }
             }
         }
+    }
+    // Restore the sink to the caller now the body loop is done.
+    if let Some(s) = b.pending_sink.take() {
+        *sink = s;
     }
 
     let ret_ty = if let Some(declared) = declared_ret {
@@ -6064,6 +6067,15 @@ struct FunctionBuilder {
     /// `name$specialisers`, but the lift pre-pass keys on the source
     /// name). Set by `lower_function_inner`.
     closure_key: String,
+    /// Sink for lifted thunks (block stages, etc.) that may be produced
+    /// while lowering an expression — specifically a `block … end` that
+    /// appears in EXPRESSION position (`Expr::Stmt(Block)`), where the
+    /// statement-loop's `sink` parameter isn't reachable. The body-level
+    /// statement loop moves the caller's sink in here on entry and merges
+    /// it back out on finish (see `lower_function_inner_keyed`). Helpers
+    /// that need it (`take_sink`/`restore_sink`) borrow it temporarily so
+    /// `lower_block_form` can take a `&mut LiftSink` distinct from `self`.
+    pending_sink: Option<LiftSink>,
 }
 
 impl FunctionBuilder {
@@ -6094,7 +6106,40 @@ impl FunctionBuilder {
             last_temp: None,
             cell_ctx: CellCtx::default(),
             closure_key,
+            pending_sink: None,
         }
+    }
+
+    /// Lower a `block … end` form that appears in EXPRESSION position.
+    /// Borrows the body-level sink (moved into `self.pending_sink` by
+    /// `lower_function_inner_keyed`) so `lower_block_form` can take a
+    /// `&mut LiftSink` separate from `self`.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_block_in_expr(
+        &mut self,
+        env: &mut LocalEnv,
+        ctx: &LowerCtx,
+        span: Span,
+        exit_var: Option<&str>,
+        body: &[Statement],
+        handlers: &[nod_reader::ExceptionClause],
+        cleanup: &[Statement],
+        afterwards: &[Statement],
+    ) -> Result<TempId, LoweringError> {
+        let Some(mut sink) = self.pending_sink.take() else {
+            return Err(LoweringError::Unsupported {
+                span,
+                message: "`block` in expression position needs a lift sink (internal)"
+                    .to_string(),
+            });
+        };
+        let parent_name = self.func.name.clone();
+        let result = lower_block_form(
+            self, &mut sink, env, ctx, span, &parent_name, exit_var, body, handlers,
+            cleanup, afterwards,
+        );
+        self.pending_sink = Some(sink);
+        result
     }
 
     fn finish(self) -> Function {
@@ -8504,12 +8549,42 @@ impl FunctionBuilder {
                 }
             }
             Statement::Expr(e) => self.lower_expr(e, env, ctx),
-            Statement::For { span, .. }
-            | Statement::Local { span, .. }
-            | Statement::Block { span, .. } => Err(LoweringError::Unsupported {
-                span: *span,
-                message: "statement form not lowerable inside an expression context".to_string(),
-            }),
+            Statement::For {
+                span,
+                clauses,
+                body,
+                finally_,
+            } => {
+                // Desugar numeric `for` to `let`+`while`; it has no value,
+                // so return a unit temp.
+                let desugared = desugar_numeric_for(*span, clauses, body, finally_)?;
+                for ds in &desugared {
+                    self.lower_stmt_as_expr(ds, env, ctx)?;
+                }
+                Ok(self.unit_temp())
+            }
+            Statement::Local { span, methods } => {
+                let enclosing = self.closure_key.clone();
+                self.lower_local_methods(&enclosing, methods, env, ctx, *span)?;
+                Ok(self.unit_temp())
+            }
+            Statement::Block {
+                span,
+                exit_var,
+                body,
+                handlers,
+                cleanup,
+                afterwards,
+            } => self.lower_block_in_expr(
+                env,
+                ctx,
+                *span,
+                exit_var.as_deref(),
+                body,
+                handlers,
+                cleanup,
+                afterwards,
+            ),
         }
     }
 
@@ -9582,6 +9657,29 @@ fn lower_statements_into(
     sink: &mut LiftSink,
     stmts: &[Statement],
 ) -> Result<(), LoweringError> {
+    // Move the sink into the builder so block forms reachable only via
+    // `lower_expr` (a `block … end` in expression position inside this
+    // thunk) can borrow it. Only the OUTERMOST call seeds it; recursive
+    // calls (the `for` desugar arm) see it already set and leave it.
+    let seeded = if b.pending_sink.is_none() {
+        b.pending_sink = Some(std::mem::take(sink));
+        true
+    } else {
+        false
+    };
+    let result = lower_statements_into_inner(b, env, ctx, stmts);
+    if seeded && let Some(s) = b.pending_sink.take() {
+        *sink = s;
+    }
+    result
+}
+
+fn lower_statements_into_inner(
+    b: &mut FunctionBuilder,
+    env: &mut LocalEnv,
+    ctx: &LowerCtx,
+    stmts: &[Statement],
+) -> Result<(), LoweringError> {
     for stmt in stmts {
         match stmt {
             Statement::Expr(e) => {
@@ -9640,7 +9738,7 @@ fn lower_statements_into(
                 // inline into this thunk.
                 let desugared = desugar_numeric_for(*span, clauses, body, finally_)?;
                 for ds in &desugared {
-                    lower_statements_into(b, env, ctx, sink, std::slice::from_ref(ds))?;
+                    lower_statements_into_inner(b, env, ctx, std::slice::from_ref(ds))?;
                 }
                 b.clear_last_temp();
             }
@@ -9652,16 +9750,12 @@ fn lower_statements_into(
                 cleanup,
                 afterwards,
             } => {
-                // Nested block. The parent function is the lifted thunk
-                // we're currently building.
-                let parent_name = b.func.name.clone();
-                let t = lower_block_form(
-                    b,
-                    sink,
+                // Nested block — borrow the thunk's sink (held in
+                // `pending_sink` by the outer `lower_statements_into`).
+                let t = b.lower_block_in_expr(
                     env,
                     ctx,
                     *span,
-                    &parent_name,
                     exit_var.as_deref(),
                     body,
                     handlers,
