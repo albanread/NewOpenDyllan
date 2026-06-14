@@ -100,28 +100,48 @@ static STDLIB_MACROS: OnceLock<MacroTable> = OnceLock::new();
 /// stdlib JIT engine never sees these constants as functions.
 static STDLIB_CONSTANTS: OnceLock<HashMap<String, i128>> = OnceLock::new();
 
-/// Sprint 29: ordered list of stdlib source files the loader
-/// processes. Each entry must live under
-/// `src/nod-dylan/dylan-sources/`. The first file owns the macros
-/// (so `for-each` etc. remain reachable); subsequent files extend
-/// the process-global tables (constants, methods). Add new entries
-/// here when introducing a new stdlib facet.
+/// Ordered list of stdlib source files the loader processes. Each entry
+/// lives under `src/nod-dylan/dylan-sources/stdlib/`. The first file owns
+/// the macros (so `for-each` etc. remain reachable via
+/// [`stdlib_macro_source`]); subsequent files contribute their items to the
+/// merged module, in this order. Add new entries here when introducing a
+/// new stdlib facet.
 const STDLIB_FILES: &[(&str, &str)] = &[
     (
-        "stdlib.dylan",
-        include_str!("../../nod-dylan/dylan-sources/stdlib.dylan"),
+        "stdlib/macros.dylan",
+        include_str!("../../nod-dylan/dylan-sources/stdlib/macros.dylan"),
     ),
     (
-        "win32-constants.dylan",
-        include_str!("../../nod-dylan/dylan-sources/win32-constants.dylan"),
+        "stdlib/collections.dylan",
+        include_str!("../../nod-dylan/dylan-sources/stdlib/collections.dylan"),
+    ),
+    (
+        "stdlib/strings.dylan",
+        include_str!("../../nod-dylan/dylan-sources/stdlib/strings.dylan"),
+    ),
+    (
+        "stdlib/ffi-callbacks.dylan",
+        include_str!("../../nod-dylan/dylan-sources/stdlib/ffi-callbacks.dylan"),
+    ),
+    (
+        "stdlib/structs.dylan",
+        include_str!("../../nod-dylan/dylan-sources/stdlib/structs.dylan"),
+    ),
+    (
+        "stdlib/streams.dylan",
+        include_str!("../../nod-dylan/dylan-sources/stdlib/streams.dylan"),
+    ),
+    (
+        "stdlib/win32-constants.dylan",
+        include_str!("../../nod-dylan/dylan-sources/stdlib/win32-constants.dylan"),
     ),
 ];
 
-/// Sprint 52.6 — the raw `stdlib.dylan` source, embedded at build time.
-/// The locus-(B) Dylan macro expander needs it to collect the stdlib's
-/// `define macro`s (so user code using `unless`/`when`/`cond`/`for-each`
-/// expands Dylan-side). This is the wire input (b) documented in
-/// `docs/DYLAN_AST_WIRE.md` §7.
+/// The stdlib's macro source, embedded at build time. The Dylan-side macro
+/// expander needs it to collect the stdlib's `define macro`s (so user code
+/// using `unless`/`when`/`cond`/`for-each` expands Dylan-side). This is
+/// `STDLIB_FILES[0]` — `stdlib/macros.dylan`, which owns every stdlib macro.
+/// See the wire-format notes in `docs/compiler/self-hosting.md`.
 pub fn stdlib_macro_source() -> &'static str {
     STDLIB_FILES[0].1
 }
@@ -267,11 +287,10 @@ fn load_stdlib() -> Result<StdlibArtefacts, LoadError> {
     // accessors. Idempotent.
     nod_runtime::ensure_structs_registered();
 
-    // Sprint 29: parse every file in `STDLIB_FILES` and merge their
-    // items into a single module. The first file (stdlib.dylan)
-    // also carries the module preamble (`Module: dylan`, etc.);
-    // subsequent files contribute items only — their preambles
-    // are accepted but discarded.
+    // Parse every file in `STDLIB_FILES` and merge their items into a
+    // single module, in file order. Each file carries its own
+    // `Module: dylan` preamble; the first file's is the module's, and
+    // subsequent preambles are accepted but discarded (only items merge).
     let mut sm = nod_reader::SourceMap::new();
     let mut merged: Option<Module> = None;
     for (label, src) in STDLIB_FILES {

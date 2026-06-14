@@ -63,6 +63,17 @@ grow without one monolithic file.
 **Acceptance.** The stdlib lives in a multi-file `stdlib/` tree described by a
 project/LID file; the full build and test sweep are green; no behaviour change.
 
+**Status — done.** The monolithic `stdlib.dylan` is split into
+`src/nod-dylan/dylan-sources/stdlib/`: `macros.dylan`, `collections.dylan`,
+`strings.dylan`, `ffi-callbacks.dylan`, `structs.dylan`, `streams.dylan`, and the
+generated `win32-constants.dylan`. The ordered file list lives in `STDLIB_FILES`
+(`src/nod-sema/src/stdlib.rs`) — `macros.dylan` is first so it owns every stdlib
+macro for the Dylan-side expander (`stdlib_macro_source`). The `generate_constants`
+tool now emits into `stdlib/`. Verified behaviour-preserving: the 128 top-level
+definitions are partitioned exactly (define-set + contiguous-byte oracles), the
+workspace builds, and the corpus is unchanged (54/55 `dump-ast`, 55/55 `dump-dfm`)
+with predicates and macro fixtures evaluating correctly.
+
 ## 3. Fix the stdlib's expression precedence
 
 **Objective.** Dylan precedence is **flat and left-associative** per the DRM
