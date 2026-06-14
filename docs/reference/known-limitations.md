@@ -107,8 +107,42 @@ or a standing design trade-off are kept here.
 
 ---
 
+## Body-shaped macro head with a custom separator does not parse
+
+* **Symptom**: a `define macro` whose head is a parenthesised `(?var:name SEP
+  ?expr:expression)` group fails unless `SEP` is `for-each`'s special-cased
+  `in`. For example a `dotimes (i below 5) … end` macro signals
+  `<simple-error>: expected ) after arguments` during expansion: the head paren
+  group `(i below 5)` is parsed as an ordinary expression (where `below` is not
+  an operator) rather than as macro-head fragments.
+* **Workaround**: shape the macro body-style with a *literal keyword* separator
+  outside any paren group (e.g. `repeat N times … end`, modelled on
+  `with-cleanup`'s `cleanup`), or use a call-shaped macro with simple args. The
+  shipped `inc!`/`dec!`/`repeat` macros use these working shapes.
+* **Planned fix**: teach the macro head matcher to treat a parenthesised head as
+  fragment patterns (name/sep/expr) rather than re-parsing it as an expression,
+  generalising the `for-each` `in` path to arbitrary separators.
+* **Scope**: medium (macro engine — `compiler/dylan-macro.dylan`,
+  `src/nod-macro/src/lib.rs`).
+* **Status**: open.
+
+## An unhandled signalled condition panics the JIT eval engine
+
+* **Symptom**: when front-end/expansion code signals a `<condition>` that no
+  handler catches (e.g. the macro-head parse error above), the process panics at
+  `src/nod-runtime/src/conditions.rs` (`unhandled signalled condition: …`)
+  instead of reporting a clean diagnostic and a non-zero exit.
+* **Workaround**: none needed for valid input; relevant only when a tool hits an
+  internal error path.
+* **Planned fix**: install a top-level condition handler in the `eval`/dump entry
+  points that renders the condition as a diagnostic and exits non-zero.
+* **Scope**: small.
+* **Status**: open.
+
 ## Notes
 
+* A live Sprint 60 corpus + improvement backlog (ranked) is recorded in
+  [the Sprint 60 plan](../sprints/sprint-60.md#4-continue-to-improve-the-compiler).
 * The IDE and the in-Dylan lexer are collectively the highest-pressure
   correctness tests the compiler has — every gap they surface is a gap real
   users will hit. Time spent fixing these gaps is time well spent.

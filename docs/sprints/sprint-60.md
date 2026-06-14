@@ -45,6 +45,16 @@ front-end output across the corpus.
 shim and the driver from a clean tree, and the rebuilt compiler reproduces the
 same shim artifact and the same front-end output on the corpus.
 
+**Status — done.** `tools/self-rebuild.ps1` (and a `tools/self-rebuild.sh`
+variant) script the loop: build the driver → rebuild the Dylan front-end shim
+*from it* → relink the driver → verify. A key gotcha is captured: the shim must
+be built with `--parse-with-rust`, otherwise the already-linked Dylan front-end
+re-registers the shim's own classes and the build fails with "class redefinition
+refused". Proven reproducible first-hand: two fresh shim builds **and** the
+committed on-disk artifact are byte-identical (`sha256 92f36804…`), and the
+front-end dumps (`dump-dylan-ast`/`dump-tokens`/`dump-dfm`) are byte-stable
+across the rebuild.
+
 ## 2. Move the stdlib into its own folders
 
 **Objective.** Replace the single `src/nod-dylan/dylan-sources/stdlib.dylan` with
@@ -122,6 +132,28 @@ front-end and the DFM lowering.
 **Acceptance.** A measurable reduction in the known-limitations list and/or an
 increase in lowered-construct coverage, each backed by tests.
 
+**Status — backlog scoped; two gaps filed.** A corpus triage (55 fixtures ×
+`dump-ast`/`dump-dfm`/Dylan-side lowering) plus a known-limitations review
+produced a ranked backlog. Highest-leverage items, in order:
+
+1. Seed the stdlib macro table in the `dump-ast` diagnostic path so it matches
+   the real pipeline — fixes the only hard corpus parse failure
+   (`macro-when-cleanup.dylan`) and removes spurious macro fall-backs. *(small)*
+2. Lower `case` / `select` in the back-end (currently a hard "not lowered" hole
+   hit by both parsers). *(medium)*
+3. Extend the AST-wire translator (`dylan_to_ast.rs`) to cover
+   `begin`/`when`/`unless`/`for`/`case` statements — the largest single bucket of
+   Dylan-parser fall-backs (9/55 fixtures). *(medium)*
+4. Grow the Dylan-side lowering past `if`/`while`/`until`/`begin` (add
+   `cond`/`case`/`for`/`block`) and stop bailing the whole module on a single
+   unsupported item, to raise the byte-match self-hosting coverage (41/55 today).
+   *(medium/large)*
+
+Two new robustness gaps were filed this sprint in
+[known-limitations](../reference/known-limitations.md): the body-shaped
+macro-head separator limitation, and an unhandled signalled condition panicking
+the `eval` engine.
+
 ## 5. Add more macros
 
 **Objective.** Grow the surface syntax defined as Dylan
@@ -137,6 +169,17 @@ per the macro/sema boundary in the [macro expander](../compiler/macro-expander.m
 
 **Acceptance.** New macros land in the stdlib, expand correctly, and are covered
 by tests; any expander gap they reveal is recorded.
+
+**Status — 3 shipped, gaps recorded.** Added to `stdlib/macros.dylan` and
+verified by JIT `eval`: `inc!` / `dec!` (in-place `x := x ± n`, call-shaped) and
+`repeat N times … end` (counted loop, body-shaped via a `times` keyword
+separator like `with-cleanup`). Two further designs — `dotimes` (indexed loop)
+and `when-let` — hit a real macro-engine limitation (a parenthesised head with a
+custom separator, e.g. `(i below 5)` / `(v = expr)`, fails to parse), and
+`assert` depends on `%error` which isn't linked in the JIT `eval` engine. These
+are deferred and filed in
+[known-limitations](../reference/known-limitations.md). Corpus unchanged;
+existing macros intact.
 
 ## 6. Cover the Dylan corpus
 

@@ -138,3 +138,56 @@ define macro with-cleanup
     => { block () ?body cleanup ?cleanup end }
 end macro;
 
+// ─── inc! / dec! macros ──────────────────────────────────────────────────────
+//
+// In-place increment / decrement of a place expression, sugar over the
+// `:=` assignment primitive. Call-shaped, so `inc!(x)` parses as an
+// ordinary call and the expander rewrites it before lowering.
+//
+//   inc!(x)      ⟹  x := x + 1
+//   inc!(x, n)   ⟹  x := x + n
+//
+// `?place:expression` binds one fragment (a bare name or a paren group);
+// a dotted/indexed place must be parenthesised — `inc!((v[i]))`.
+
+define macro inc!
+  { inc!(?place:expression) }                 => { ?place := ?place + 1 }
+  { inc!(?place:expression, ?n:expression) }  => { ?place := ?place + ?n }
+end macro;
+
+define macro dec!
+  { dec!(?place:expression) }                 => { ?place := ?place - 1 }
+  { dec!(?place:expression, ?n:expression) }  => { ?place := ?place - ?n }
+end macro;
+
+// ─── repeat macro ────────────────────────────────────────────────────────────
+//
+// Run a body N times, ignoring the index. Body-shaped with a `times`
+// keyword separator (the same delimiter mechanism as `with-cleanup`'s
+// `cleanup`); expands to a hidden-counter `while` loop (`while` lowers in
+// every context; `for` does not). `%repeat-i` is a template-introduced
+// binder, hygiene-renamed (same as `for-each`'s `%fip-state`) so it can't
+// collide with a caller's name.
+//
+//   repeat 3 times do-thing() end
+//   ⟹  begin let i = 0; while (i < 3) do-thing(); i := i + 1 end end
+
+define macro repeat
+  { repeat ?count:expression times ?body:body end }
+    => { begin
+           let %repeat-i = 0;
+           while (%repeat-i < ?count)
+             ?body;
+             %repeat-i := %repeat-i + 1
+           end
+         end }
+end macro;
+
+// NOTE: an indexed `dotimes (i below N) … end` counted loop is deferred.
+// A body-shaped macro whose head is `(var <sep> expr)` with a separator
+// other than `for-each`'s special-cased `in` does not parse — the head
+// paren group is read as an expression and signals "expected ) after
+// arguments" (which, unhandled, panics the eval engine). Tracked in
+// docs/reference/known-limitations.md. Use `repeat N times … end` (no
+// index) or `for-each (x in coll) … end` meanwhile.
+
