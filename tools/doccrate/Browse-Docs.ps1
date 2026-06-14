@@ -2,13 +2,13 @@
 .SYNOPSIS
     Open the NewOpenDylan manual in DocCrate.
 .DESCRIPTION
-    Launches doc-crate.exe pointed at docs/manual so you can browse the
+    Launches doc-crate.exe pointed at docs/ so you can browse the
     hand-written language + compiler documentation interactively.
 .EXAMPLE
     .\Browse-Docs.ps1
 #>
 param(
-    [string]$DocsDir = (Join-Path $PSScriptRoot '..\..\docs\manual')
+    [string]$DocsDir = (Join-Path $PSScriptRoot '..\..\docs')
 )
 $ErrorActionPreference = 'Stop'
 $exe  = Join-Path $PSScriptRoot 'doc-crate.exe'
