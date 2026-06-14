@@ -1197,6 +1197,83 @@ pub unsafe extern "C-unwind" fn nod_op_gt(a: u64, b: u64) -> u64 {
     if av > bv { imm.true_.raw() } else { imm.false_.raw() }
 }
 
+/// `\==` — IDENTITY equality. Raw-bit compare of the two Words (fixnums
+/// carry their value in the bits, so this matches the inline
+/// `PrimOp::EqInt` semantics; pointer-tagged objects compare by
+/// identity). Returns the pinned `#t` / `#f` Word.
+///
+/// # Safety
+///
+/// No preconditions. Inputs are any Dylan tagged Words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C-unwind" fn nod_op_eq_eq(a: u64, b: u64) -> u64 {
+    let imm = crate::literal_pool_immediates();
+    if a == b { imm.true_.raw() } else { imm.false_.raw() }
+}
+
+/// `\~=` — VALUE inequality. Mirrors the inline `~=` lowering which
+/// routes pointer-shaped operands through `%object-equal?`: we call the
+/// public `nod_object_equal_p`, then return the OPPOSITE boolean
+/// immediate. Boxed numbers / strings get value semantics (two distinct
+/// content-equal strings compare `~=` as `#f`), NOT identity semantics.
+///
+/// # Safety
+///
+/// No preconditions. Inputs are any Dylan tagged Words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C-unwind" fn nod_op_ne(a: u64, b: u64) -> u64 {
+    let imm = crate::literal_pool_immediates();
+    // SAFETY: nod_object_equal_p accepts any two Dylan Words.
+    let eq = unsafe { crate::nod_object_equal_p(a, b) };
+    // Compare-to-immediate-and-invert: equal -> `#f`, not-equal -> `#t`.
+    if eq == imm.true_.raw() {
+        imm.false_.raw()
+    } else {
+        imm.true_.raw()
+    }
+}
+
+/// `\~==` — IDENTITY inequality (the inverse of `\==`).
+///
+/// # Safety
+///
+/// No preconditions. Inputs are any Dylan tagged Words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C-unwind" fn nod_op_ne_eq(a: u64, b: u64) -> u64 {
+    let imm = crate::literal_pool_immediates();
+    if a == b { imm.false_.raw() } else { imm.true_.raw() }
+}
+
+/// `instance?` — first-class form. The 2nd arg arrives as a runtime
+/// class Word (a ClassMetadata pointer that `emit_class_ref` tagged with
+/// `| 1`). We untag via `Word::as_ptr` (which masks `& !1`); if the Word
+/// isn't pointer-shaped (no class metadata) we defensively return `#f`.
+/// Otherwise we read `ClassMetadata.id` and route through
+/// `nod_is_instance_of_word`, mirroring the inline `instance?` CPL-walk
+/// semantics.
+///
+/// # Safety
+///
+/// `value` is any Dylan Word; `class_word` must be a tagged class
+/// metadata Word (as produced by `emit_class_ref`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C-unwind" fn nod_instance_p(value: u64, class_word: u64) -> u64 {
+    let imm = crate::literal_pool_immediates();
+    // `Word::as_ptr` masks `& !1` and validates alignment; `None` means
+    // the Word isn't a pointer-tagged class metadata Word.
+    let Some(md_ptr) = Word::from_raw(class_word).as_ptr::<ClassMetadata>() else {
+        return imm.false_.raw();
+    };
+    // SAFETY: a class Word's payload points at a pinned `ClassMetadata`.
+    let class_id = unsafe { (*md_ptr).id };
+    let v = Word::from_raw(value);
+    if crate::nod_is_instance_of_word(v, class_id) {
+        imm.true_.raw()
+    } else {
+        imm.false_.raw()
+    }
+}
+
 /// Install the operator shims into `RUST_FUNCTION_REGISTRY`. Idempotent
 /// — safe to call repeatedly. Called from the `LiteralPool`
 /// initialiser path (via `ensure_registered`).
@@ -1204,6 +1281,20 @@ pub fn ensure_operator_shims_registered() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
         // SAFETY: each shim has the canonical `(u64, u64) -> u64` ABI.
+        //
+        // This runs in BOTH the JIT path AND AOT-exe startup (via
+        // `nod_runtime_init` -> `ensure_registered`), so the shims are
+        // present in a built EXE — a prior attempt registered the
+        // `==` / `~=` / `instance?` shims on a JIT-only path and the
+        // built exe panicked `nod_make_function_ref: no registered
+        // function ==`. Keep all built-in operator shims here.
+        //
+        // CAVEAT (`is_generic_defined` shadowing): `make_function_ref`
+        // (~line 932) checks `is_generic_defined(name)` BEFORE the
+        // rust-shim path, so a future stdlib `==` / `~=` / `~==` /
+        // `instance?` GENERIC would shadow these refs and route through
+        // a generic-dispatch trampoline instead. No such generic exists
+        // today, so `\==` etc. resolve to these shims.
         unsafe {
             register_rust_function("+", 2, nod_op_plus as *const u8);
             register_rust_function("-", 2, nod_op_minus as *const u8);
@@ -1211,6 +1302,10 @@ pub fn ensure_operator_shims_registered() {
             register_rust_function("=", 2, nod_op_eq as *const u8);
             register_rust_function("<", 2, nod_op_lt as *const u8);
             register_rust_function(">", 2, nod_op_gt as *const u8);
+            register_rust_function("==", 2, nod_op_eq_eq as *const u8);
+            register_rust_function("~=", 2, nod_op_ne as *const u8);
+            register_rust_function("~==", 2, nod_op_ne_eq as *const u8);
+            register_rust_function("instance?", 2, nod_instance_p as *const u8);
         }
     });
 }

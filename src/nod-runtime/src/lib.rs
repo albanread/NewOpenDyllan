@@ -220,10 +220,10 @@ pub use functions::{
     function_arity, function_class_id, function_code_ptr, function_env_ptr, function_kind_tag,
     function_name, is_function, lookup_function_code, make_function, make_function_ref,
     make_generic_trampoline_ref, make_wrong_number_of_arguments_error, nod_apply, nod_funcall0,
-    nod_funcall1, nod_funcall2, nod_funcall3, nod_funcall4, nod_funcall5, nod_make_closure,
-    nod_make_function_ref, nod_op_eq, nod_op_gt, nod_op_lt, nod_op_minus, nod_op_plus,
-    nod_op_times, register_jit_function, register_rust_function,
-    wrong_number_of_arguments_error_class_id,
+    nod_funcall1, nod_funcall2, nod_funcall3, nod_funcall4, nod_funcall5, nod_instance_p,
+    nod_make_closure, nod_make_function_ref, nod_op_eq, nod_op_eq_eq, nod_op_gt, nod_op_lt,
+    nod_op_minus, nod_op_ne, nod_op_ne_eq, nod_op_plus, nod_op_times, register_jit_function,
+    register_rust_function, wrong_number_of_arguments_error_class_id,
 };
 pub use heap::{
     DEFAULT_OLD_BYTES, DEFAULT_RESERVATION_BYTES, DEFAULT_YOUNG_BYTES, GcConfig, HEAP_ALIGN, Heap,

@@ -432,6 +432,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "nod-aot-stub"
+version = "0.0.1"
+
+[[package]]
 name = "nod-dfm"
 version = "0.0.1"
 dependencies = [
@@ -509,6 +513,7 @@ version = "0.0.1"
 dependencies = [
  "libc",
  "newgc-core",
+ "nod-aot-stub",
  "serial_test",
  "windows 0.58.0",
  "windows-sys 0.59.0",
