@@ -17,10 +17,10 @@ pub mod span;
 pub mod token;
 
 pub use ast::{
-    BinOp, Binder, CaseArm, ExceptionClause, Expr, ForClause, ImportSet, ImportSpec, Item,
-    LibraryUseClause, LocalMethodDecl, Modifier, Module, ModuleUseClause, Param, ReturnRest,
-    ReturnSig, ReturnValue, SlotAllocation, SlotDef, Statement, UnOp, format_ast,
-    format_ast_module,
+    BinOp, Binder, CaseArm, ExceptionClause, Expr, ForClause, FromForClause, ImportSet,
+    ImportSpec, Item, LibraryUseClause, LocalMethodDecl, Modifier, Module, ModuleUseClause,
+    NumericForClause, Param, ReturnRest, ReturnSig, ReturnValue, SlotAllocation, SlotDef,
+    Statement, StepForClause, UnOp, format_ast, format_ast_module,
 };
 pub use format::format_tokens;
 pub use format_dylan::format_dylan;

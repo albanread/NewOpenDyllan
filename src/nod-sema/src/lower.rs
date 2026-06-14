@@ -4885,13 +4885,16 @@ fn lower_function_inner_keyed(
                 body: for_body,
                 finally_,
             } => {
-                // Sprint: desugar a numeric-range `for` into `let` +
-                // `while` and lower the pair inline. `for` has no value,
-                // so it never sets `final_temp`.
+                // Desugar the `for` into pre-loop `let`s, a `while`, and a
+                // trailing result value (the `finally` body, or `#f`).
+                // Lower each piece inline. The for-EXPRESSION's value is
+                // the result of the trailing statement(s); thread it into
+                // `final_temp` when this `for` is the body's last form.
                 let desugared = desugar_numeric_for(*span, clauses, for_body, finally_)?;
+                let mut for_value: Option<TempId> = None;
                 for ds in &desugared {
                     match ds {
-                        Statement::Let { binders, value, .. } => {
+                        Statement::Let { binders, value, .. } if binders.len() == 1 => {
                             let bname = &binders[0].name;
                             let t = b.lower_expr(value, &mut env, ctx)?;
                             let bound = if b.cell_ctx.cell_locals.contains(bname) {
@@ -4908,16 +4911,22 @@ fn lower_function_inner_keyed(
                                 t
                             };
                             env.insert(bname.clone(), bound);
+                            for_value = Some(bound);
                         }
                         Statement::While { cond, body: wbody, .. } => {
                             b.lower_while_like(cond, wbody, false, &mut env, ctx)?;
+                            for_value = None;
                         }
-                        // desugar_numeric_for only ever emits Let + While.
-                        _ => unreachable!("unexpected desugared `for` statement"),
+                        // Trailing `finally` statements (or the `#f`
+                        // result): lower as a value-producing form so the
+                        // last one supplies the for-expression's value.
+                        other => {
+                            for_value = Some(b.lower_stmt_as_expr(other, &mut env, ctx)?);
+                        }
                     }
                 }
                 if is_last {
-                    final_temp = None;
+                    final_temp = for_value;
                 }
             }
             Statement::Block {
@@ -8673,13 +8682,16 @@ impl FunctionBuilder {
                 body,
                 finally_,
             } => {
-                // Desugar numeric `for` to `let`+`while`; it has no value,
-                // so return a unit temp.
+                // Desugar `for` to `let`s + `while` + result. The for's
+                // value (used when it appears in expression position, e.g.
+                // `block (return) for (…) finally R end end`) is the
+                // result of its trailing statement(s).
                 let desugared = desugar_numeric_for(*span, clauses, body, finally_)?;
+                let mut last = self.unit_temp();
                 for ds in &desugared {
-                    self.lower_stmt_as_expr(ds, env, ctx)?;
+                    last = self.lower_stmt_as_expr(ds, env, ctx)?;
                 }
-                Ok(self.unit_temp())
+                Ok(last)
             }
             Statement::Local { span, methods } => {
                 let enclosing = self.closure_key.clone();
@@ -8721,28 +8733,48 @@ impl FunctionBuilder {
     }
 }
 
-/// Desugar a numeric-range `for` clause into a `let` + `while` pair.
+/// Desugar a `for` loop into a sequence of `let` bindings, a `while`
+/// loop, and a trailing result expression.
 ///
-/// Handles the common single-clause case:
-/// ```text
-///   for (VAR from FROM [to TO | below BELOW | above ABOVE] [by BY])
-///     BODY…
-///   end
-/// ```
-/// → (returned as two AST statements)
-/// ```text
-///   let VAR = FROM;
-///   while (COND) BODY… ; VAR := VAR + BY end
-/// ```
-/// where `COND` is `VAR <= TO` / `VAR < BELOW` / `VAR > ABOVE` and `BY`
-/// defaults to `1`. The `var <= to` bound is inclusive per the Dylan
-/// spec; `below`/`above` are exclusive.
+/// Handles the full clause vocabulary the front-end models:
 ///
-/// Returns `Ok(Some([let, while]))` for the supported shape. For any
-/// unsupported form — `in`-collection, explicit-step, keyed-by,
-/// while/until/from clauses, multiple clauses, a non-empty `finally`, or
-/// a numeric clause missing both `to`/`below`/`above` — returns an
-/// `Unsupported` error so the caller bails cleanly.
+/// * **Numeric** — `VAR [:: T] from FROM [to TO | below BELOW | above
+///   ABOVE] [by BY]`. Binds `let VAR = FROM`, contributes the bound test
+///   `VAR <= TO` / `VAR < BELOW` / `VAR > ABOVE` to the loop condition,
+///   and steps `VAR := VAR + BY` (BY defaults to 1). `to` is inclusive;
+///   `below`/`above` are exclusive.
+/// * **Step** — `VAR = INIT [then NEXT]`. Binds `let VAR = INIT`; if
+///   `then NEXT` is present, steps `VAR := NEXT`. Contributes no bound.
+/// * **Bare from** — `VAR` shorthand modelled as a step with no bound.
+/// * **`until:` COND** — contributes `~COND` to the loop condition
+///   (loop while the until-test is false).
+/// * **`while:` COND** — contributes `COND` to the loop condition.
+///
+/// Multiple comma-separated clauses compose: every clause's `let` runs
+/// once before the loop; every clause's step runs each iteration; the
+/// loop continues while the conjunction (`&`) of all bound/while/until
+/// tests holds. Steps use **parallel** (simultaneous) assignment — all
+/// `NEXT` / `VAR + BY` expressions read the values from the start of the
+/// iteration. We realise this by evaluating each next-value into a fresh
+/// `let`-bound temp first, then assigning them all.
+///
+/// The desugar shape is:
+/// ```text
+///   let v1 = init1; …; let vN = initN;
+///   while ( <conjunction of all tests> )
+///     BODY…;
+///     let __for_next_v1 = step1; …;     // parallel next-values
+///     v1 := __for_next_v1; …;           // then assign
+///   end;
+///   <finally-result or #f>
+/// ```
+/// The trailing statement(s) carry the `for` expression's value: the
+/// `finally` body if present (it may reference the loop variables in
+/// their post-loop state), otherwise `#f`.
+///
+/// `in`-collection and `keyed-by` clauses are NOT handled here (the
+/// for-each macro expands those); they return an `Unsupported` error so
+/// the caller bails cleanly.
 fn desugar_numeric_for(
     span: Span,
     clauses: &[ForClause],
@@ -8753,81 +8785,281 @@ fn desugar_numeric_for(
         span,
         message: format!("`for` not lowered: {msg}"),
     };
-    if !finally_.is_empty() {
-        return Err(bail("`finally` clause unsupported"));
+    if clauses.is_empty() {
+        return Err(bail("`for` with no clauses unsupported"));
     }
-    if clauses.len() != 1 {
-        return Err(bail("only a single numeric-range clause is supported"));
+
+    // Pre-loop `let` bindings (one per iteration variable), the
+    // accumulated loop-continuation tests (conjoined with `&`), and the
+    // end-of-iteration step statements (next-value temps, then the
+    // parallel assignments).
+    let mut lets: Vec<Statement> = Vec::new();
+    let mut tests: Vec<Expr> = Vec::new();
+    let mut next_temps: Vec<Statement> = Vec::new();
+    let mut assigns: Vec<Statement> = Vec::new();
+
+    // Counter so each step clause gets a unique temp name for its
+    // parallel next-value. Names use a sigil-prefixed form that cannot
+    // collide with a source identifier.
+    let mut next_idx = 0usize;
+
+    for clause in clauses {
+        match clause {
+            ForClause::Numeric(nfc) => {
+                let var = nfc.var.clone();
+                let var_ident = Expr::Ident(span, var.clone());
+                // Bound → continuation test. At most one is meaningful;
+                // prefer below/above/to in that order if several parsed.
+                if let Some(b) = &nfc.below {
+                    tests.push(Expr::BinOp {
+                        span,
+                        op: BinOp::Lt,
+                        lhs: Box::new(var_ident.clone()),
+                        rhs: Box::new(b.clone()),
+                    });
+                } else if let Some(a) = &nfc.above {
+                    tests.push(Expr::BinOp {
+                        span,
+                        op: BinOp::Gt,
+                        lhs: Box::new(var_ident.clone()),
+                        rhs: Box::new(a.clone()),
+                    });
+                } else if let Some(t) = &nfc.to {
+                    // `to` is inclusive but DIRECTION-sensitive: with a
+                    // negative literal step the loop descends, so the
+                    // continuation test is `VAR >= TO`, not `VAR <= TO`.
+                    // (For a non-literal `by`, we assume ascending — the
+                    // historical behaviour; corpus descending loops all use
+                    // a negative integer literal like `by -1`.)
+                    let op = if by_is_negative_literal(nfc.by.as_ref()) {
+                        BinOp::Ge
+                    } else {
+                        BinOp::Le
+                    };
+                    tests.push(Expr::BinOp {
+                        span,
+                        op,
+                        lhs: Box::new(var_ident.clone()),
+                        rhs: Box::new(t.clone()),
+                    });
+                }
+                // (A numeric clause with no bound contributes no test —
+                // valid as long as some OTHER clause bounds the loop.)
+
+                // BY defaults to 1; step is VAR := VAR + BY.
+                let by = nfc.by.clone().unwrap_or(Expr::Integer(span, 1));
+                let next = Expr::BinOp {
+                    span,
+                    op: BinOp::Add,
+                    lhs: Box::new(var_ident.clone()),
+                    rhs: Box::new(by),
+                };
+                push_step(span, &mut next_idx, &var, next, &mut next_temps, &mut assigns);
+
+                lets.push(Statement::Let {
+                    span,
+                    binders: vec![Binder { span, name: var, type_: None }],
+                    rest: None,
+                    value: nfc.from.clone(),
+                });
+            }
+            ForClause::From(ffc) => {
+                // Bare `from` (no bound): bind and step by `by` (default
+                // 1). No continuation test of its own.
+                let var = ffc.var.clone();
+                let var_ident = Expr::Ident(span, var.clone());
+                let by = ffc.by.clone().unwrap_or(Expr::Integer(span, 1));
+                let next = Expr::BinOp {
+                    span,
+                    op: BinOp::Add,
+                    lhs: Box::new(var_ident.clone()),
+                    rhs: Box::new(by),
+                };
+                push_step(span, &mut next_idx, &var, next, &mut next_temps, &mut assigns);
+                lets.push(Statement::Let {
+                    span,
+                    binders: vec![Binder { span, name: var, type_: None }],
+                    rest: None,
+                    value: ffc.from.clone(),
+                });
+            }
+            ForClause::Step(sfc) => {
+                // `var = init [then next]`: bind init; step to next if a
+                // `then` clause was given (otherwise the value is fixed).
+                let var = sfc.var.clone();
+                if let Some(next) = &sfc.next {
+                    push_step(
+                        span,
+                        &mut next_idx,
+                        &var,
+                        next.clone(),
+                        &mut next_temps,
+                        &mut assigns,
+                    );
+                }
+                lets.push(Statement::Let {
+                    span,
+                    binders: vec![Binder { span, name: var, type_: None }],
+                    rest: None,
+                    value: sfc.init.clone(),
+                });
+            }
+            ForClause::While { cond, .. } => {
+                // `while: T` — loop while T holds.
+                tests.push(cond.clone());
+            }
+            ForClause::Until { cond, .. } => {
+                // `until: T` — loop while ~T holds.
+                tests.push(Expr::UnOp {
+                    span,
+                    op: UnOp::Not,
+                    operand: Box::new(cond.clone()),
+                });
+            }
+            ForClause::In { .. } => {
+                return Err(bail("`in`-collection clause unsupported"));
+            }
+            ForClause::Keyed { .. } => {
+                return Err(bail("`keyed-by` clause unsupported"));
+            }
+        }
     }
-    let nfc = match &clauses[0] {
-        ForClause::Numeric(n) => n,
-        ForClause::In { .. } => return Err(bail("`in`-collection clause unsupported")),
-        ForClause::From(_) => return Err(bail("bare `from` clause unsupported")),
-        ForClause::Step(_) => return Err(bail("explicit `= init then next` clause unsupported")),
-        ForClause::Keyed { .. } => return Err(bail("`keyed-by` clause unsupported")),
-        ForClause::Until { .. } => return Err(bail("`until` clause unsupported")),
-        ForClause::While { .. } => return Err(bail("`while` clause unsupported")),
+
+    // The loop condition is the conjunction of all tests. With no test at
+    // all the loop never terminates — reject (matches the old "needs
+    // to/below/above" guard for the pure-numeric case, but now satisfied
+    // by any `to`/`below`/`above`/`while:`/`until:`).
+    let cond = match conjoin(span, tests) {
+        Some(c) => c,
+        None => return Err(bail("loop has no termination test (need `to`/`below`/`above`/`while:`/`until:`)")),
     };
 
-    let var = nfc.var.clone();
-    let var_ident = Expr::Ident(span, var.clone());
-
-    // COND from the bound (to/below/above). At most one is meaningful;
-    // prefer below/above/to in that order if several were parsed.
-    let (op, bound) = if let Some(b) = &nfc.below {
-        (BinOp::Lt, b.clone())
-    } else if let Some(a) = &nfc.above {
-        (BinOp::Gt, a.clone())
-    } else if let Some(t) = &nfc.to {
-        (BinOp::Le, t.clone())
-    } else {
-        return Err(bail("numeric clause needs `to`, `below`, or `above`"));
-    };
-    let cond = Expr::BinOp {
-        span,
-        op,
-        lhs: Box::new(var_ident.clone()),
-        rhs: Box::new(bound),
-    };
-
-    // BY defaults to 1.
-    let step = nfc
-        .by
-        .clone()
-        .unwrap_or(Expr::Integer(span, 1));
-
-    // Increment: VAR := VAR + BY  (appended to the loop body).
-    let increment = Statement::Expr(Expr::BinOp {
-        span,
-        op: BinOp::Assign,
-        lhs: Box::new(var_ident.clone()),
-        rhs: Box::new(Expr::BinOp {
-            span,
-            op: BinOp::Add,
-            lhs: Box::new(var_ident.clone()),
-            rhs: Box::new(step),
-        }),
-    });
-
+    // Loop body = user body, then the parallel next-value temps, then the
+    // assignments back to the iteration variables.
     let mut while_body: Vec<Statement> = body.to_vec();
-    while_body.push(increment);
+    while_body.extend(next_temps);
+    while_body.extend(assigns);
 
-    let let_stmt = Statement::Let {
-        span,
-        binders: vec![Binder {
-            span,
-            name: var,
-            type_: None,
-        }],
-        rest: None,
-        value: nfc.from.clone(),
-    };
     let while_stmt = Statement::While {
         span,
         cond,
         body: while_body,
     };
-    Ok(vec![let_stmt, while_stmt])
+
+    // Assemble: all lets, the while, then the result value. The `finally`
+    // body (if any) is the result; otherwise the `for` value is `#f`.
+    let mut out = lets;
+    out.push(while_stmt);
+    if finally_.is_empty() {
+        out.push(Statement::Expr(Expr::Bool(span, false)));
+    } else {
+        out.extend(finally_.iter().cloned());
+    }
+    Ok(out)
+}
+
+/// Helper for [`desugar_numeric_for`]: register a parallel step for
+/// iteration variable `var` whose end-of-iteration value is `next`.
+///
+/// Emits `let __for_next_<n> = next;` into `next_temps` and `var :=
+/// __for_next_<n>;` into `assigns`. Splitting evaluation (into a fresh
+/// temp) from assignment gives Dylan's simultaneous-step semantics: a
+/// step's `next` reads every iteration variable's value from the START
+/// of the iteration, not the partially-updated values.
+fn push_step(
+    span: Span,
+    next_idx: &mut usize,
+    var: &str,
+    next: Expr,
+    next_temps: &mut Vec<Statement>,
+    assigns: &mut Vec<Statement>,
+) {
+    let tmp = format!("__for_next_{}", *next_idx);
+    *next_idx += 1;
+    next_temps.push(Statement::Let {
+        span,
+        binders: vec![Binder { span, name: tmp.clone(), type_: None }],
+        rest: None,
+        value: next,
+    });
+    assigns.push(Statement::Expr(Expr::BinOp {
+        span,
+        op: BinOp::Assign,
+        lhs: Box::new(Expr::Ident(span, var.to_string())),
+        rhs: Box::new(Expr::Ident(span, tmp)),
+    }));
+}
+
+/// Is this `by` step a compile-time negative integer literal? Used to
+/// pick the direction of a numeric `to` bound (descending → `>=`).
+/// Recognises `-N` (parsed as `UnOp::Neg` over a positive `Integer`) and
+/// a directly-negative `Integer`. A `None` (absent `by`, defaults to +1)
+/// or any non-literal expression is treated as non-negative.
+fn by_is_negative_literal(by: Option<&Expr>) -> bool {
+    match by {
+        Some(Expr::Integer(_, v)) => *v < 0,
+        Some(Expr::UnOp { op: UnOp::Neg, operand, .. }) => {
+            matches!(operand.as_ref(), Expr::Integer(_, v) if *v > 0)
+        }
+        _ => false,
+    }
+}
+
+/// Fold a list of boolean test expressions into a single left-associated
+/// `&` conjunction. Returns `None` for an empty list (no test).
+fn conjoin(span: Span, tests: Vec<Expr>) -> Option<Expr> {
+    let mut it = tests.into_iter();
+    let mut acc = it.next()?;
+    for t in it {
+        acc = Expr::BinOp {
+            span,
+            op: BinOp::And,
+            lhs: Box::new(acc),
+            rhs: Box::new(t),
+        };
+    }
+    Some(acc)
+}
+
+/// Visit every source expression embedded in a `for`-clause: the
+/// numeric `from`/`to`/`below`/`above`/`by`, the step `init`/`next`, the
+/// bare-`from` clause's `from`/`by`, the `while:`/`until:` condition, and
+/// the `in`/`keyed-by` collection. Used by the enclosing-loop phi
+/// analysis (`collect_assigned_*` / `collect_used_bound_*`) so that a
+/// nested `for`'s clause expressions are accounted for when they
+/// reference — or assign — outer bindings.
+fn for_clause_exprs(c: &ForClause, f: &mut impl FnMut(&Expr)) {
+    match c {
+        ForClause::Numeric(n) => {
+            f(&n.from);
+            if let Some(e) = &n.to {
+                f(e);
+            }
+            if let Some(e) = &n.below {
+                f(e);
+            }
+            if let Some(e) = &n.above {
+                f(e);
+            }
+            if let Some(e) = &n.by {
+                f(e);
+            }
+        }
+        ForClause::From(ff) => {
+            f(&ff.from);
+            if let Some(e) = &ff.by {
+                f(e);
+            }
+        }
+        ForClause::Step(s) => {
+            f(&s.init);
+            if let Some(e) = &s.next {
+                f(e);
+            }
+        }
+        ForClause::While { cond, .. } | ForClause::Until { cond, .. } => f(cond),
+        ForClause::In { coll, .. } | ForClause::Keyed { coll, .. } => f(coll),
+    }
 }
 
 /// Sprint 18: walk a loop body and collect every local-variable name
@@ -8881,21 +9113,7 @@ fn collect_used_bound_names_in_stmt(s: &Statement, env: &LocalEnv, out: &mut Has
             // the body resolve locally and won't spuriously appear here
             // (it isn't in the enclosing `env` unless it shadows).
             for c in clauses {
-                if let ForClause::Numeric(n) = c {
-                    collect_used_bound_names_in_expr_into(&n.from, env, out);
-                    if let Some(e) = &n.to {
-                        collect_used_bound_names_in_expr_into(e, env, out);
-                    }
-                    if let Some(e) = &n.below {
-                        collect_used_bound_names_in_expr_into(e, env, out);
-                    }
-                    if let Some(e) = &n.above {
-                        collect_used_bound_names_in_expr_into(e, env, out);
-                    }
-                    if let Some(e) = &n.by {
-                        collect_used_bound_names_in_expr_into(e, env, out);
-                    }
-                }
+                for_clause_exprs(c, &mut |e| collect_used_bound_names_in_expr_into(e, env, out));
             }
             for s2 in body {
                 collect_used_bound_names_in_stmt(s2, env, out);
@@ -8990,11 +9208,11 @@ fn collect_assigned_in_stmt(s: &Statement, env: &LocalEnv, out: &mut HashSet<Str
             // Outer bindings reassigned inside a nested `for` body must be
             // carried by the enclosing loop's header phi. The for's own
             // loop variable is bound inside the desugared inner `while`, so
-            // it isn't in `env` here and won't be (mis)counted.
+            // it isn't in `env` here and won't be (mis)counted. Walk every
+            // clause kind's sub-expressions (init/next/from/bounds/cond)
+            // since any can contain an `:=` to an outer binding.
             for c in clauses {
-                if let ForClause::Numeric(n) = c {
-                    collect_assigned_in_expr(&n.from, env, out);
-                }
+                for_clause_exprs(c, &mut |e| collect_assigned_in_expr(e, env, out));
             }
             for s2 in body {
                 collect_assigned_in_stmt(s2, env, out);
@@ -9852,13 +10070,15 @@ fn lower_statements_into_inner(
                 body,
                 finally_,
             } => {
-                // Desugar numeric `for` to `let` + `while` and lower each
-                // inline into this thunk.
+                // Desugar `for` to `let`s + `while` + result and lower
+                // each inline into this thunk. The trailing result
+                // statement leaves the for-value in `last_temp`, so a
+                // `for (…) finally R end` as the thunk's final form yields
+                // R as the thunk value — don't clear it.
                 let desugared = desugar_numeric_for(*span, clauses, body, finally_)?;
                 for ds in &desugared {
                     lower_statements_into_inner(b, env, ctx, std::slice::from_ref(ds))?;
                 }
-                b.clear_last_temp();
             }
             Statement::Block {
                 span,
@@ -9992,6 +10212,192 @@ mod sprint31_tests {
                 eprintln!("EnumWindows actually materialized with sig {signature:?}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod for_desugar_tests {
+    //! Coverage for [`desugar_numeric_for`] and helpers: the `for`-loop
+    //! lowering for numeric/step/while/until clauses, multiple clauses,
+    //! parallel-step ordering, and the `finally` result value.
+    use super::*;
+    use nod_reader::{FromForClause, NumericForClause, StepForClause};
+
+    fn sp() -> Span {
+        Span { file_id: nod_reader::FileId(0), lo: 0, hi: 0 }
+    }
+    fn ident(n: &str) -> Expr {
+        Expr::Ident(sp(), n.to_string())
+    }
+    fn int(v: i128) -> Expr {
+        Expr::Integer(sp(), v)
+    }
+    fn numeric(var: &str, from: Expr, to: Option<Expr>, by: Option<Expr>) -> ForClause {
+        ForClause::Numeric(Box::new(NumericForClause {
+            span: sp(),
+            var: var.to_string(),
+            from,
+            to,
+            below: None,
+            above: None,
+            by,
+        }))
+    }
+    fn step(var: &str, init: Expr, next: Option<Expr>) -> ForClause {
+        ForClause::Step(Box::new(StepForClause { span: sp(), var: var.to_string(), init, next }))
+    }
+
+    // `by -1` is `UnOp::Neg(Integer(1))`, as the parser produces.
+    fn neg(v: i128) -> Expr {
+        Expr::UnOp { span: sp(), op: UnOp::Neg, operand: Box::new(int(v)) }
+    }
+
+    #[test]
+    fn by_negative_literal_recognised() {
+        assert!(by_is_negative_literal(Some(&neg(1))));
+        assert!(by_is_negative_literal(Some(&int(-3))));
+        assert!(!by_is_negative_literal(Some(&int(1))));
+        assert!(!by_is_negative_literal(Some(&ident("s"))));
+        assert!(!by_is_negative_literal(None));
+    }
+
+    #[test]
+    fn single_numeric_shape_unchanged() {
+        // `for (i from 1 to n) body end` → [let i = 1, while (i <= n) …],
+        // plus the no-finally `#f` result.
+        let clauses = vec![numeric("i", int(1), Some(ident("n")), None)];
+        let body = vec![Statement::Expr(ident("body"))];
+        let out = desugar_numeric_for(sp(), &clauses, &body, &[]).unwrap();
+        assert_eq!(out.len(), 3, "let + while + #f result");
+        assert!(matches!(out[0], Statement::Let { .. }));
+        let Statement::While { cond, body: wbody, .. } = &out[1] else {
+            panic!("expected while, got {:?}", out[1]);
+        };
+        // ascending `to` → `<=`.
+        assert!(matches!(cond, Expr::BinOp { op: BinOp::Le, .. }));
+        // body then the increment assignment temp + assign.
+        assert!(wbody.len() >= 3, "user body + next-temp + assign");
+        // result is `#f` (no finally).
+        assert!(matches!(out[2], Statement::Expr(Expr::Bool(_, false))));
+    }
+
+    #[test]
+    fn descending_to_uses_ge() {
+        // `for (n from n to 0 by -1) …` → continuation test `n >= 0`.
+        let clauses = vec![numeric("n", ident("n"), Some(int(0)), Some(neg(1)))];
+        let out = desugar_numeric_for(sp(), &clauses, &[], &[]).unwrap();
+        let Statement::While { cond, .. } = &out[1] else { panic!() };
+        assert!(
+            matches!(cond, Expr::BinOp { op: BinOp::Ge, .. }),
+            "descending `to` must use >=, got {cond:?}"
+        );
+    }
+
+    #[test]
+    fn finally_becomes_result() {
+        // `for (i from 1 to 5) … finally s end` → trailing stmt is `s`.
+        let clauses = vec![numeric("i", int(1), Some(int(5)), None)];
+        let finally_ = vec![Statement::Expr(ident("s"))];
+        let out = desugar_numeric_for(sp(), &clauses, &[], &finally_).unwrap();
+        let last = out.last().unwrap();
+        assert!(matches!(last, Statement::Expr(Expr::Ident(_, n)) if n == "s"));
+    }
+
+    #[test]
+    fn multi_clause_parallel_steps() {
+        // `for (l = l then tail(l), a = #() then pair(head(l), a), until: empty?(l))`
+        // → two lets (l, a); while cond is the until's `~empty?(l)`; the
+        // loop body holds two next-temps THEN two assignments (parallel).
+        let until = ForClause::Until {
+            span: sp(),
+            cond: Expr::Call { span: sp(), callee: Box::new(ident("empty?")), args: vec![ident("l")] },
+        };
+        let l_step = step(
+            "l",
+            ident("l"),
+            Some(Expr::Call { span: sp(), callee: Box::new(ident("tail")), args: vec![ident("l")] }),
+        );
+        let a_step = step(
+            "a",
+            Expr::Ident(sp(), "#()".to_string()),
+            Some(Expr::Call {
+                span: sp(),
+                callee: Box::new(ident("pair")),
+                args: vec![
+                    Expr::Call { span: sp(), callee: Box::new(ident("head")), args: vec![ident("l")] },
+                    ident("a"),
+                ],
+            }),
+        );
+        let clauses = vec![l_step, a_step, until];
+        let out = desugar_numeric_for(sp(), &clauses, &[], &[]).unwrap();
+        // two pre-loop lets (l, a), then while, then `#f`.
+        assert!(matches!(out[0], Statement::Let { .. }));
+        assert!(matches!(out[1], Statement::Let { .. }));
+        let Statement::While { cond, body, .. } = &out[2] else { panic!() };
+        // until → `~empty?(l)`.
+        assert!(matches!(cond, Expr::UnOp { op: UnOp::Not, .. }));
+        // body: 2 next-temps (let) then 2 assigns — all next-temps come
+        // BEFORE any assignment, giving simultaneous-step semantics.
+        let lets_before_assigns = {
+            let mut seen_assign = false;
+            let mut ok = true;
+            for s in body {
+                match s {
+                    Statement::Let { binders, .. }
+                        if binders[0].name.starts_with("__for_next_") =>
+                    {
+                        if seen_assign {
+                            ok = false;
+                        }
+                    }
+                    Statement::Expr(Expr::BinOp { op: BinOp::Assign, .. }) => seen_assign = true,
+                    _ => {}
+                }
+            }
+            ok
+        };
+        assert!(lets_before_assigns, "all next-value temps must precede assignments");
+    }
+
+    #[test]
+    fn no_termination_test_is_rejected() {
+        // A bare `from` clause (no bound) and no while/until ⇒ no test ⇒
+        // reject rather than emit an infinite loop.
+        let clauses = vec![ForClause::From(Box::new(FromForClause {
+            span: sp(),
+            var: "i".to_string(),
+            from: int(0),
+            by: None,
+        }))];
+        let err = desugar_numeric_for(sp(), &clauses, &[], &[]).unwrap_err();
+        assert!(matches!(err, LoweringError::Unsupported { .. }));
+    }
+
+    #[test]
+    fn while_keyword_clause_is_the_test() {
+        let clauses = vec![
+            step("i", int(1), Some(Expr::BinOp {
+                span: sp(),
+                op: BinOp::Add,
+                lhs: Box::new(ident("i")),
+                rhs: Box::new(int(1)),
+            })),
+            ForClause::While {
+                span: sp(),
+                cond: Expr::BinOp {
+                    span: sp(),
+                    op: BinOp::Le,
+                    lhs: Box::new(ident("i")),
+                    rhs: Box::new(int(4)),
+                },
+            },
+        ];
+        let out = desugar_numeric_for(sp(), &clauses, &[], &[]).unwrap();
+        let Statement::While { cond, .. } = &out[1] else { panic!() };
+        // `while: i <= 4` is used directly (not negated).
+        assert!(matches!(cond, Expr::BinOp { op: BinOp::Le, .. }));
     }
 }
 
