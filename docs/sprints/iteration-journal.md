@@ -12,7 +12,7 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 47 / 161 | was 34 before the testworks-compat macros |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 55 / 161 | 34 → 47 (macros) → 52 (bindings) → 55 (lowering) |
 | OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
@@ -20,6 +20,42 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 ## Iterations
 
 *(newest first)*
+
+### 2026-06-14 — Iteration 9: back-end lowering features (agent, worktree) — compile 52 → 55
+
+- **Approach:** ran a dedicated agent in an isolated git worktree; reviewed +
+  verified + merged its work onto main (all in `src/nod-sema/src/lower.rs`).
+- **Landed:** (1) numeric-range `for` → `let`+`while` desugar (`<=`/`<`/`>` per
+  `to`/`below`/`above`, default step 1); (2) 0-parameter `define method` → a
+  direct-call function; (3) **`local method`** via the existing closure/cell
+  machinery — one `<cell>` per local method up front (mutual recursion),
+  `%make-closure` capturing those cells, calls through `%cell-get` +
+  `nod_funcall_N` (fixed a real source-vs-mangled name-keying bug along the way);
+  (4) statement forms (`block`/`for`/`local method`) in expression position via a
+  `pending_sink` on the builder. `in`/explicit-step/multi-clause/`finally` `for`
+  forms still bail cleanly.
+- **Verified by me (not just the agent's claims):** in-tree 55/55 (ast+dfm);
+  nod-sema unit tests 37/37; corpus compile 52 → 55. **Correctness runs** (build
+  → exe → run): `for` sum 1..100 = 5050, `for above` countdown = 15, recursive
+  `local method` `fact(5)` = 120 (capture + self-recursion), 0-param method = 42.
+  `deriv`/`tak`/`ctak` newly compile.
+
+### 2026-06-14 — Iteration 8: stdlib library bindings (agent, worktree) — compile 47 → 52
+
+- **Approach:** dedicated agent in an isolated worktree; I read the full diff,
+  verified, and merged. New `stdlib/sequences.dylan` (+ registration in
+  `stdlib.rs`), pure Dylan over existing primitives (FIP, pair, SOV, `%funcall*`).
+- **Added:** number predicates (`even?`/`odd?`/`zero?`/`positive?`/`negative?`);
+  sequence accessors/searches/folds (`first`/`second`/`third`/`last`/`member?`/
+  `any?`/`every?`/`find-key`/`reduce1`/`empty?`/`aref`); builders
+  (`reverse`/`choose`/`remove`/`add`/`list`/`pair`/`head`/`tail`); `max`/`min`;
+  setters; `$maximum-integer`/`$minimum-integer`/`$machine-word-size`.
+- **Verified:** corpus compile 47 → 52; in-tree 55/55; `eval '1 + 1'` = 2.
+- **Caveat (documented inline):** a few are thin stand-ins (non-destructive
+  `add!`/`reverse!`/`sort!`, 1-arg `list`, ignored `test:`/`count:`) — labeled
+  stubs in the same spirit as the testworks helpers, to be made faithful when the
+  class machinery / variadic `#rest` / in-place primitives land. Harmless now
+  (suites don't *run* yet — no runner).
 
 ### 2026-06-14 — Iteration 7: minimal testworks (`define test`/`define suite` + `check-*`) — corpus compile 34 → 47
 
