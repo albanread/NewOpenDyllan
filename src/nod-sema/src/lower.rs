@@ -44,7 +44,9 @@ use nod_dfm::{
     Block, BlockId, ClassCheck, Computation, ConstValue, Function, FunctionId, PrimOp,
     SlotTypeKind, TempId, Temporary, Terminator, TypeEstimate,
 };
-use nod_reader::{BinOp, Binder, Expr, Item, Module, Param, ReturnSig, Span, Statement, UnOp};
+use nod_reader::{
+    BinOp, Binder, Expr, ForClause, Item, Module, Param, ReturnSig, Span, Statement, UnOp,
+};
 use nod_runtime::{
     ClassId, ClassMetadata, SlotDefault, SlotInfo, SlotType, Word, class_metadata_for,
     class_metadata_ptr, find_class_id_by_name, find_class_id_by_name_excluding_shim_band,
@@ -4812,11 +4814,46 @@ fn lower_function_inner(
                     final_temp = None;
                 }
             }
-            Statement::For { span, .. } => {
-                return Err(LoweringError::Unsupported {
-                    span: *span,
-                    message: "`for` not lowered in Sprint 18 (use `for-range` macro or rewrite to `while`)".to_string(),
-                });
+            Statement::For {
+                span,
+                clauses,
+                body: for_body,
+                finally_,
+            } => {
+                // Sprint: desugar a numeric-range `for` into `let` +
+                // `while` and lower the pair inline. `for` has no value,
+                // so it never sets `final_temp`.
+                let desugared = desugar_numeric_for(*span, clauses, for_body, finally_)?;
+                for ds in &desugared {
+                    match ds {
+                        Statement::Let { binders, value, .. } => {
+                            let bname = &binders[0].name;
+                            let t = b.lower_expr(value, &mut env, ctx)?;
+                            let bound = if b.cell_ctx.cell_locals.contains(bname) {
+                                let cell = b.fresh_temp(TypeEstimate::Top);
+                                b.push(Computation::DirectCall {
+                                    dst: cell,
+                                    callee: "nod_make_cell".to_string(),
+                                    args: vec![t],
+                                    safepoint_roots: Vec::new(),
+                                    is_no_alloc: false,
+                                });
+                                cell
+                            } else {
+                                t
+                            };
+                            env.insert(bname.clone(), bound);
+                        }
+                        Statement::While { cond, body: wbody, .. } => {
+                            b.lower_while_like(cond, wbody, false, &mut env, ctx)?;
+                        }
+                        // desugar_numeric_for only ever emits Let + While.
+                        _ => unreachable!("unexpected desugared `for` statement"),
+                    }
+                }
+                if is_last {
+                    final_temp = None;
+                }
             }
             Statement::Block {
                 span,
@@ -8095,10 +8132,20 @@ impl FunctionBuilder {
             Statement::Until { cond, body, .. } => {
                 self.lower_while_like(cond, body, true, env, ctx)
             }
-            Statement::For { span, .. } => Err(LoweringError::Unsupported {
-                span: *span,
-                message: "`for` inside loop body not lowered (Sprint 25)".to_string(),
-            }),
+            Statement::For {
+                span,
+                clauses,
+                body,
+                finally_,
+            } => {
+                // Nested numeric-range `for`: desugar to `let` + `while`
+                // and lower each via the loop-body statement path.
+                let desugared = desugar_numeric_for(*span, clauses, body, finally_)?;
+                for ds in &desugared {
+                    self.lower_loop_body_stmt(ds, env, ctx)?;
+                }
+                Ok(())
+            }
             Statement::Block { span, .. } => Err(LoweringError::Unsupported {
                 span: *span,
                 message: "`block` inside loop body not lowered (Sprint 19)".to_string(),
@@ -8181,6 +8228,115 @@ impl FunctionBuilder {
     }
 }
 
+/// Desugar a numeric-range `for` clause into a `let` + `while` pair.
+///
+/// Handles the common single-clause case:
+/// ```text
+///   for (VAR from FROM [to TO | below BELOW | above ABOVE] [by BY])
+///     BODY…
+///   end
+/// ```
+/// → (returned as two AST statements)
+/// ```text
+///   let VAR = FROM;
+///   while (COND) BODY… ; VAR := VAR + BY end
+/// ```
+/// where `COND` is `VAR <= TO` / `VAR < BELOW` / `VAR > ABOVE` and `BY`
+/// defaults to `1`. The `var <= to` bound is inclusive per the Dylan
+/// spec; `below`/`above` are exclusive.
+///
+/// Returns `Ok(Some([let, while]))` for the supported shape. For any
+/// unsupported form — `in`-collection, explicit-step, keyed-by,
+/// while/until/from clauses, multiple clauses, a non-empty `finally`, or
+/// a numeric clause missing both `to`/`below`/`above` — returns an
+/// `Unsupported` error so the caller bails cleanly.
+fn desugar_numeric_for(
+    span: Span,
+    clauses: &[ForClause],
+    body: &[Statement],
+    finally_: &[Statement],
+) -> Result<Vec<Statement>, LoweringError> {
+    let bail = |msg: &str| LoweringError::Unsupported {
+        span,
+        message: format!("`for` not lowered: {msg}"),
+    };
+    if !finally_.is_empty() {
+        return Err(bail("`finally` clause unsupported"));
+    }
+    if clauses.len() != 1 {
+        return Err(bail("only a single numeric-range clause is supported"));
+    }
+    let nfc = match &clauses[0] {
+        ForClause::Numeric(n) => n,
+        ForClause::In { .. } => return Err(bail("`in`-collection clause unsupported")),
+        ForClause::From(_) => return Err(bail("bare `from` clause unsupported")),
+        ForClause::Step(_) => return Err(bail("explicit `= init then next` clause unsupported")),
+        ForClause::Keyed { .. } => return Err(bail("`keyed-by` clause unsupported")),
+        ForClause::Until { .. } => return Err(bail("`until` clause unsupported")),
+        ForClause::While { .. } => return Err(bail("`while` clause unsupported")),
+    };
+
+    let var = nfc.var.clone();
+    let var_ident = Expr::Ident(span, var.clone());
+
+    // COND from the bound (to/below/above). At most one is meaningful;
+    // prefer below/above/to in that order if several were parsed.
+    let (op, bound) = if let Some(b) = &nfc.below {
+        (BinOp::Lt, b.clone())
+    } else if let Some(a) = &nfc.above {
+        (BinOp::Gt, a.clone())
+    } else if let Some(t) = &nfc.to {
+        (BinOp::Le, t.clone())
+    } else {
+        return Err(bail("numeric clause needs `to`, `below`, or `above`"));
+    };
+    let cond = Expr::BinOp {
+        span,
+        op,
+        lhs: Box::new(var_ident.clone()),
+        rhs: Box::new(bound),
+    };
+
+    // BY defaults to 1.
+    let step = nfc
+        .by
+        .clone()
+        .unwrap_or(Expr::Integer(span, 1));
+
+    // Increment: VAR := VAR + BY  (appended to the loop body).
+    let increment = Statement::Expr(Expr::BinOp {
+        span,
+        op: BinOp::Assign,
+        lhs: Box::new(var_ident.clone()),
+        rhs: Box::new(Expr::BinOp {
+            span,
+            op: BinOp::Add,
+            lhs: Box::new(var_ident.clone()),
+            rhs: Box::new(step),
+        }),
+    });
+
+    let mut while_body: Vec<Statement> = body.to_vec();
+    while_body.push(increment);
+
+    let let_stmt = Statement::Let {
+        span,
+        binders: vec![Binder {
+            span,
+            name: var,
+            type_: None,
+        }],
+        rest: None,
+        value: nfc.from.clone(),
+    };
+    let while_stmt = Statement::While {
+        span,
+        cond,
+        body: while_body,
+    };
+    Ok(vec![let_stmt, while_stmt])
+}
+
 /// Sprint 18: walk a loop body and collect every local-variable name
 /// reassigned via `:=` (or shadowed by an inner `let`). Used by
 /// [`FunctionBuilder::lower_while_like`] to drive the loop-header phi
@@ -8219,7 +8375,43 @@ fn collect_used_bound_names_in_stmt(s: &Statement, env: &LocalEnv, out: &mut Has
                 collect_used_bound_names_in_stmt(s2, env, out);
             }
         }
-        Statement::For { .. } | Statement::Block { .. } | Statement::Local { .. } => {}
+        Statement::For {
+            clauses,
+            body,
+            finally_,
+            ..
+        } => {
+            // A nested numeric `for` desugars to `let`+`while`; for the
+            // ENCLOSING loop's phi analysis we treat the clause bounds and
+            // the for-body as reads of outer bindings. The for's own loop
+            // variable is freshly bound inside, so references to it inside
+            // the body resolve locally and won't spuriously appear here
+            // (it isn't in the enclosing `env` unless it shadows).
+            for c in clauses {
+                if let ForClause::Numeric(n) = c {
+                    collect_used_bound_names_in_expr_into(&n.from, env, out);
+                    if let Some(e) = &n.to {
+                        collect_used_bound_names_in_expr_into(e, env, out);
+                    }
+                    if let Some(e) = &n.below {
+                        collect_used_bound_names_in_expr_into(e, env, out);
+                    }
+                    if let Some(e) = &n.above {
+                        collect_used_bound_names_in_expr_into(e, env, out);
+                    }
+                    if let Some(e) = &n.by {
+                        collect_used_bound_names_in_expr_into(e, env, out);
+                    }
+                }
+            }
+            for s2 in body {
+                collect_used_bound_names_in_stmt(s2, env, out);
+            }
+            for s2 in finally_ {
+                collect_used_bound_names_in_stmt(s2, env, out);
+            }
+        }
+        Statement::Block { .. } | Statement::Local { .. } => {}
     }
 }
 
@@ -8296,7 +8488,29 @@ fn collect_assigned_in_stmt(s: &Statement, env: &LocalEnv, out: &mut HashSet<Str
                 collect_assigned_in_stmt(s2, env, out);
             }
         }
-        Statement::For { .. } | Statement::Block { .. } | Statement::Local { .. } => {}
+        Statement::For {
+            clauses,
+            body,
+            finally_,
+            ..
+        } => {
+            // Outer bindings reassigned inside a nested `for` body must be
+            // carried by the enclosing loop's header phi. The for's own
+            // loop variable is bound inside the desugared inner `while`, so
+            // it isn't in `env` here and won't be (mis)counted.
+            for c in clauses {
+                if let ForClause::Numeric(n) = c {
+                    collect_assigned_in_expr(&n.from, env, out);
+                }
+            }
+            for s2 in body {
+                collect_assigned_in_stmt(s2, env, out);
+            }
+            for s2 in finally_ {
+                collect_assigned_in_stmt(s2, env, out);
+            }
+        }
+        Statement::Block { .. } | Statement::Local { .. } => {}
     }
 }
 
