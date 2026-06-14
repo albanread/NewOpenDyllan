@@ -139,6 +139,35 @@ or a standing design trade-off are kept here.
 * **Scope**: small.
 * **Status**: open.
 
+## `define test`/`define suite` keyword (property-list) heads don't expand
+
+* **Symptom**: testworks heads its tests with a keyword property list —
+  `define test foo (description: "...") … end`, `(title: "...")`,
+  `(expected-failure?: #t)`, `(when: method () … end)`. These fail: the test/suite
+  macro doesn't expand, so the test function is never defined ("unknown callee").
+  Affects ~24 corpus test files. A NON-keyword paren head (`(foo)`, `(a, b)`,
+  `(x :: <integer>)`) DOES work once a `?opts:parameter-list` rule is added — the
+  macro matcher's `ParameterList` kind matches ANY paren `Fragment::Group`,
+  keyword content included. The blocker is upstream of the macro layer.
+* **Root cause (traced 2026-06-14)**: `parse_module_with_macros_rust` returns
+  `Err` if ANY `parse_top_item` errors. For a keyword head, a parse pass parses the
+  head as an EXPRESSION and aborts at the `KeywordColon` (`unexpected token
+  KeywordColon`, parse_atom in `parser.rs`) — even though `parse_define_other`
+  itself token-skips the head cleanly and returns a well-formed `DefineOther`. The
+  module-level `Err` makes the whole pipeline bail BEFORE macro expansion runs, so
+  the test is never expanded.
+* **Note on ROI**: fixing this alone yields ~0 corpus *compile* gain — those files
+  have independent downstream blockers (`<bit-vector>`, parser features, etc.).
+  It's a correctness/foundation fix (the test macro should accept real testworks
+  shapes), not a metric mover.
+* **Planned fix**: ensure a definition-macro head is never expression-parsed at the
+  module level (token-skip only, as `parse_define_other` already does) so keyword
+  property lists don't trip parse_atom; then add the `?opts:parameter-list` rule to
+  `test`/`suite`/`benchmark`. (Two agents mis-fixed this with
+  `?opts:parameter-list` alone, which can't help while the parse still aborts.)
+* **Scope**: medium (`src/nod-reader/src/parser.rs` parse path + the stdlib macros).
+* **Status**: open.
+
 ## Cold-build AOT EXE link fails with `LNK2005 nod_user_main`
 
 * **Symptom**: on a freshly built tree (a new worktree, after `cargo clean`, or
