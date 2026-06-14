@@ -805,7 +805,8 @@ impl<'a> Parser<'a> {
                         let s = self.parse_block()?;
                         Ok(Expr::Stmt(Box::new(s)))
                     }
-                    _ if self.known_macros.contains(&word)
+                    _ if (self.known_macros.contains(&word)
+                        || Self::is_block_opener_kw(&word))
                         && self.peek_after_ident_is_macro_call_shape() =>
                     {
                         self.parse_body_shaped_macro_call(t, word)

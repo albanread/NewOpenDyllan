@@ -11,13 +11,29 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 | Metric | Value | Notes |
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
-| OpenDylan corpus parse (`dump-ast`) | 139 / 161 | language + stdlib suites (DUIM/etc. excluded) |
+| OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
 | OpenDylan corpus lower (`dump-dfm`) | _baseline TBD_ | |
 | OpenDylan corpus build/run | 0 | the headline goal to move |
 
 ## Iterations
 
 *(newest first)*
+
+### 2026-06-14 — Iteration 3: route library body-macros as macro calls (parser bug)
+
+- **Target:** the residual `KwEnd` (context-(b) body-macros in *parsed* function
+  bodies) — gabriel `stak`/`traverse`/`triang` (`dynamic-bind`), plus
+  `with-lock`/`with-open-file`/etc. used inside `define function`/`method`.
+- **Diagnosis:** these are block-openers (`is_block_opener_kw`) but were not in
+  the parser's `known_macros` set, so the statement dispatch parsed them as plain
+  calls (no body) and their `end` dangled.
+- **Fix:** route any `is_block_opener_kw` word (not just `known_macros`) to
+  `parse_body_shaped_macro_call` when the call shape matches — one-line guard
+  change at the expression/statement dispatch.
+- **Result:** corpus parse **139 → 150**; `KwEnd` failures 12 → 1. In-tree
+  fixtures unchanged (55/55). The remaining 11 failures are long-tail singletons
+  (keyword-symbol atoms, no-`end` define-forms, adjacent strings, `==`/operator
+  names, a couple of param-list `,` cases).
 
 ### 2026-06-14 — Iteration 2: nested body-macro `end` balancing (parser bug)
 
