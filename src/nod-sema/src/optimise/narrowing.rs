@@ -49,6 +49,11 @@ pub fn narrow_function(f: &Function) -> NarrowedEstimates {
                 // checks contribute nothing.
                 let cid = match class {
                     nod_dfm::ClassCheck::UserClass { id, .. } => Some(ClassId(*id)),
+                    // In the then-branch the value IS an instance of the
+                    // abstract vector/array class (a real SOV or a
+                    // `<bit-vector>` both qualify), so narrowing to that
+                    // class id is sound.
+                    nod_dfm::ClassCheck::VectorOrUserClass { id, .. } => Some(ClassId(*id)),
                     nod_dfm::ClassCheck::Integer => Some(ClassId::INTEGER),
                     nod_dfm::ClassCheck::Boolean => Some(ClassId::BOOLEAN),
                     nod_dfm::ClassCheck::String => Some(ClassId::BYTE_STRING),

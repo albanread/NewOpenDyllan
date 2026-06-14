@@ -306,6 +306,21 @@ const LOWER_PRIMITIVE_TABLE: &[(&str, &str, usize, TypeEstimate)] = &[
         TypeEstimate::Top,
     ),
     ("%stretchy-vector-push", "nod_stretchy_vector_push", 2, TypeEstimate::Top),
+    // Collection-classes lever (Part A2) — <bit-vector> primitives. The
+    // `make(<bit-vector>, …)` allocation is a `lower_make` redirect (see
+    // below); these surface element/size/count to the Dylan generics in
+    // `stdlib/arrays.dylan`.
+    ("%bit-vector-ref", "nod_bit_vector_ref", 2, TypeEstimate::Integer),
+    ("%bit-vector-set", "nod_bit_vector_set", 3, TypeEstimate::Top),
+    ("%bit-vector-size", "nod_bit_vector_size", 1, TypeEstimate::Integer),
+    ("%bit-vector-count", "nod_bit_vector_count", 1, TypeEstimate::Integer),
+    // Word-level bitwise integer primitives (logand/logior/logxor/lognot/
+    // ash) over fixnums — the building blocks for bit-vector ops.
+    ("%logand", "nod_logand", 2, TypeEstimate::Integer),
+    ("%logior", "nod_logior", 2, TypeEstimate::Integer),
+    ("%logxor", "nod_logxor", 2, TypeEstimate::Integer),
+    ("%lognot", "nod_lognot", 1, TypeEstimate::Integer),
+    ("%ash", "nod_ash", 2, TypeEstimate::Integer),
     // FIP primitives — drive the existing Rust iteration state.
     ("%fip-init", "nod_fip_init", 1, TypeEstimate::Top),
     ("%fip-finished?", "nod_fip_finished_p", 1, TypeEstimate::Boolean),
@@ -7298,6 +7313,49 @@ impl FunctionBuilder {
             }
             return Ok(tail);
         }
+        // Collection-classes lever: `#[a, b, c]` literal vectors. The
+        // parser emits `Call(Ident("#vector"), [a, b, c])`. Lower as a
+        // fresh `<simple-object-vector>` of length N (`nod_make_sov_len`)
+        // with each element installed via `nod_sov_element_setter` —
+        // mirrors `emit_make_closure`'s cells-vector construction. The
+        // SOV itself is rooted across the per-element setters by the
+        // standard safepoint machinery (the element exprs are lowered
+        // before the allocation so no GC-managed intermediate spans it).
+        if let Expr::Ident(_, name) = callee
+            && name == "#vector"
+        {
+            // Lower every element first (before the SOV allocation), so a
+            // GC during a later element's lowering can't strand a
+            // half-built SOV.
+            let elem_temps: Vec<TempId> = args
+                .iter()
+                .map(|a| self.lower_expr(a, env, ctx))
+                .collect::<Result<_, _>>()?;
+            let len_t = self.fresh_temp(TypeEstimate::Integer);
+            self.push(Computation::Const {
+                dst: len_t,
+                value: ConstValue::Integer(elem_temps.len() as i128),
+            });
+            let sov_t = self.fresh_temp(TypeEstimate::Class(
+                nod_runtime::ClassId::SIMPLE_OBJECT_VECTOR.0,
+            ));
+            self.push(Computation::DirectCall {
+                dst: sov_t,
+                callee: "nod_make_sov_len".to_string(),
+                args: vec![len_t],
+                safepoint_roots: Vec::new(),
+                is_no_alloc: false,
+            });
+            for (i, &elt) in elem_temps.iter().enumerate() {
+                let i_t = self.fresh_temp(TypeEstimate::Integer);
+                self.push(Computation::Const {
+                    dst: i_t,
+                    value: ConstValue::Integer(i as i128),
+                });
+                let _ = self.emit_sov_element_setter(elt, sov_t, i_t);
+            }
+            return Ok(sov_t);
+        }
         // Sprint 20b: `%`-prefixed primitive ops. Each entry in
         // `LOWER_PRIMITIVE_TABLE` lowers to a `DirectCall` against a
         // `nod_*` runtime shim. Args are type-checked for arity only;
@@ -7728,6 +7786,49 @@ impl FunctionBuilder {
             });
             return Ok(dst);
         }
+        // Collection-classes lever (Part A2): `make(<bit-vector>, size:,
+        // fill:)` needs a backing words-SOV allocated before the outer
+        // object, which the generic keyword-init path can't do. Redirect
+        // to the `nod_bit_vector_allocate(size, fill)` primitive (mirrors
+        // the `<table>` arm). A `define method make` would be dead code
+        // because this intercepts at the call site. `size:` defaults to 0,
+        // `fill:` to `#f` (clear).
+        if find_class_id_by_name("<bit-vector>").map(|c| c == class_id).unwrap_or(false) {
+            let mut size_temp: Option<TempId> = None;
+            let mut fill_temp: Option<TempId> = None;
+            for a in &args[1..] {
+                if let Expr::Call { callee, args: kwargs, .. } = a
+                    && matches!(callee.as_ref(), Expr::Ident(_, n) if n == "%kw-arg")
+                    && kwargs.len() == 2
+                    && let Expr::Symbol(_, s) = &kwargs[0]
+                {
+                    match s.trim_end_matches(':') {
+                        "size" => size_temp = Some(self.lower_expr(&kwargs[1], env, ctx)?),
+                        "fill" => fill_temp = Some(self.lower_expr(&kwargs[1], env, ctx)?),
+                        _ => {}
+                    }
+                }
+            }
+            let size = size_temp.unwrap_or_else(|| self.emit_fixnum_const(0));
+            // Default fill is `#f` (clear) — emit the boolean-false const.
+            let fill = fill_temp.unwrap_or_else(|| {
+                let t = self.fresh_temp(TypeEstimate::Boolean);
+                self.push(Computation::Const {
+                    dst: t,
+                    value: ConstValue::Bool(false),
+                });
+                t
+            });
+            let dst = self.fresh_temp(TypeEstimate::Class(class_id.0));
+            self.push(Computation::DirectCall {
+                dst,
+                callee: "nod_bit_vector_allocate".to_string(),
+                args: vec![size, fill],
+                safepoint_roots: Vec::new(),
+                is_no_alloc: false,
+            });
+            return Ok(dst);
+        }
         let class_word_temp = self.emit_class_metadata_ptr_const(class_id);
         // Remaining args: kw: value pairs (parser-wrapped as
         // `Call(%kw-arg, [Symbol("kw:"), value])`).
@@ -8050,7 +8151,38 @@ impl FunctionBuilder {
                 "<boolean>" => ClassCheck::Boolean,
                 "<string>" | "<byte-string>" => ClassCheck::String,
                 "<symbol>" => ClassCheck::Symbol,
-                "<simple-object-vector>" | "<vector>" => ClassCheck::Vector,
+                // `<simple-object-vector>` keeps the exact-id fast path:
+                // it is the concrete SOV class (id 9), and a real SOV's
+                // wrapper carries exactly that id.
+                "<simple-object-vector>" => ClassCheck::Vector,
+                // Collection-classes lever: `<vector>` / `<array>` /
+                // `<simple-vector>` are abstract stdlib classes. A real
+                // `<simple-object-vector>` IS one of them, but its CPL
+                // (seed class parented on `<object>`) does NOT contain the
+                // abstract class id, so an exact-id check OR a CPL walk
+                // alone is each insufficient. Route through
+                // `VectorOrUserClass`, which codegen lowers as the SOV
+                // fast path OR `nod_is_instance_of` — so both a real SOV
+                // and a `<bit-vector>` (whose CPL DOES contain `<vector>`)
+                // answer `#t`. Resolve the abstract class's runtime id by
+                // name (the stdlib `define class`es registered it).
+                "<vector>" | "<array>" | "<simple-vector>" => {
+                    match ctx
+                        .user_classes
+                        .get(name)
+                        .copied()
+                        .or_else(|| resolve_class_id_by_name(name))
+                    {
+                        Some(id) => ClassCheck::VectorOrUserClass {
+                            id: id.0,
+                            name: name.clone(),
+                        },
+                        // Stdlib not yet registered (shouldn't happen in
+                        // the real pipeline) — fall back to the SOV fast
+                        // path so a real SOV still answers `#t`.
+                        None => ClassCheck::Vector,
+                    }
+                }
                 "<character>" => ClassCheck::Character,
                 "<empty-list>" => ClassCheck::EmptyList,
                 _ => {

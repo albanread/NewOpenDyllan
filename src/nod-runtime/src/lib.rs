@@ -58,6 +58,7 @@ mod aot;
 // only (no Rust items used), so the object is still pulled on-demand, never
 // forced. See `nod-aot-stub/src/lib.rs`.
 extern crate nod_aot_stub as _;
+mod bitvectors;
 mod c_types;
 mod callbacks;
 mod classes;
@@ -99,6 +100,15 @@ mod wrapper;
 // reference them (the `#[unsafe(no_mangle)]` extern surface is what the
 // linker sees; the `pub use` is just to give cargo-test callers a path).
 pub use aot::{nod_aot_main_wrapper, nod_aot_register_variable, nod_runtime_init};
+// Collection-classes lever (Part A2) — `<bit-vector>` allocate/ref/set/
+// size/count redirects + word-level bitwise primitives. The
+// `#[unsafe(no_mangle)]` extern surface is what the AOT linker / JIT
+// symbol table see; the `pub use` gives test + driver callers a path.
+pub use bitvectors::{
+    bit_vector_count, bit_vector_ref, bit_vector_set, bit_vector_size, make_bit_vector,
+    nod_ash, nod_bit_vector_allocate, nod_bit_vector_count, nod_bit_vector_ref,
+    nod_bit_vector_set, nod_bit_vector_size, nod_logand, nod_logior, nod_lognot, nod_logxor,
+};
 pub use classes::{
     ClassId, ClassMetadata, ClassTable, LayoutFn, ScanFn, SizeFn, SlotDefault, SlotInfo,
     SlotType, _reset_user_classes_for_tests, allocate_user_class_id, class_metadata_for,
