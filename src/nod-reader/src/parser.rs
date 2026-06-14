@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 
 use crate::ast::{
-    BinOp, Binder, CaseArm, ExceptionClause, Expr, ForClause, FromForClause, ImportSet,
+    BinOp, Binder, ExceptionClause, Expr, ForClause, FromForClause, ImportSet,
     ImportSpec, Item, LibraryUseClause, LocalMethodDecl, Modifier, Module, ModuleUseClause,
     NumericForClause, Param, ReturnRest, ReturnSig, ReturnValue, SlotAllocation, SlotDef,
     Statement, StepForClause, UnOp,
@@ -259,6 +259,11 @@ struct Parser<'a> {
     /// climbing, set from a `Precedence: c` module header. See
     /// [`Self::parse_binary`] / [`Self::parse_or`].
     precedence_c: bool,
+    /// Monotone counter for synthetic `%select-key-N` binders introduced
+    /// when desugaring `select (key …) …` into an `if`-tree. The key is
+    /// evaluated ONCE into this binder; a fresh suffix per `select` keeps
+    /// nested selects from colliding. See [`Self::parse_select`].
+    select_counter: u32,
 }
 
 impl<'a> Parser<'a> {
@@ -269,6 +274,7 @@ impl<'a> Parser<'a> {
             pos: 0,
             known_macros: seed_macros.clone(),
             precedence_c: false,
+            select_counter: 0,
         }
     }
 
@@ -1225,59 +1231,108 @@ impl<'a> Parser<'a> {
         })))
     }
 
+    /// `select (key [by test]) v1, v2 => body; … otherwise => body; end select`
+    ///
+    /// Desugared HERE into an `if`/`elseif`-tree — the frozen kernel
+    /// primitive — so every downstream pass (lift, free-var capture,
+    /// lowering, AOT codegen) sees only `Expr::If` and needs no
+    /// `Expr::Case` support. This is the same expansion a `define macro`
+    /// would produce; the macro engine can't yet express the surface
+    /// (`*`-repetition of `;`-separated, comma-value, multi-statement
+    /// arms + an `end select` keyword), so the desugaring lives where the
+    /// structured arm data is already in hand.
+    ///
+    /// Shape:
+    ///   `begin let %select-key-N = <key>;
+    ///      if (TEST(%select-key-N, v1) | TEST(%select-key-N, v2)) body1
+    ///      elseif (…) body2 …
+    ///      else <otherwise-or-#f> end
+    ///    end`
+    /// where TEST is `=` by default, or `f(key, v)` for `select (k by f)`.
+    /// The key is evaluated EXACTLY ONCE (bound to the synthetic binder).
     fn parse_select(&mut self) -> Result<Expr, Diagnostic> {
-        // `select (key)` with optional `by test` then arms `value [, value] => body;`
-        // Reuse the case grammar but with the select head. We don't fully
-        // model select-by-test in v1; we just permit the surface.
         let kw = self.bump();
         self.expect(TokenKind::LParen, "`(` after `select`")?;
         let key = self.parse_expr_full()?;
-        // Optional `by <test>`.
+        // Optional `by <test>` — the membership test function. Absent ⇒ `=`.
+        let mut test: Option<Expr> = None;
         if let t = self.peek()
             && self.ident_text_is(t, "by")
         {
             self.bump();
-            let _ = self.parse_expr_full()?;
+            test = Some(self.parse_expr_full()?);
         }
         self.expect(TokenKind::RParen, "`)` in select head")?;
-        let mut arms: Vec<CaseArm> = Vec::new();
-        let mut otherwise: Option<Box<Expr>> = None;
+
+        // Fresh, unique binder for the once-evaluated key.
+        let n = self.select_counter;
+        self.select_counter += 1;
+        let key_name = format!("%select-key-{n}");
+        let key_span = key.span();
+
+        // Collect arms as (value-list, body) and an optional otherwise.
+        let mut arms: Vec<(Vec<Expr>, Vec<Expr>)> = Vec::new();
+        let mut otherwise: Option<Vec<Expr>> = None;
+        let end_tok;
         loop {
             let t = self.peek();
             if t.kind == TokenKind::KwEnd {
-                let end_tok = self.bump();
+                end_tok = self.bump();
                 self.consume_optional_kw("select");
-                return Ok(Expr::Case {
-                    span: join(kw.span, end_tok.span),
-                    arms,
-                    otherwise,
-                });
+                break;
             }
             if t.kind == TokenKind::KwOtherwise {
                 self.bump();
                 self.expect(TokenKind::Arrow, "`=>` after `otherwise`")?;
-                let body = self.parse_body_until_end()?;
-                let span = body_span(&body, t.span);
-                otherwise = Some(Box::new(Expr::Begin { span, body }));
+                otherwise = Some(self.parse_case_arm_body()?);
                 continue;
             }
-            // value, value => body
-            let cond = self.parse_expr_full()?;
+            // value [, value]* => body
+            let mut values = vec![self.parse_expr_full()?];
             while matches!(self.peek_kind(), TokenKind::Comma) {
                 self.bump();
-                let _ = self.parse_expr_full()?;
+                values.push(self.parse_expr_full()?);
             }
             self.expect(TokenKind::Arrow, "`=>` after select arm value(s)")?;
             let body = self.parse_case_arm_body()?;
-            let span = join(
-                cond.span(),
-                body.last().map(|e| e.span()).unwrap_or(cond.span()),
-            );
-            // `key` participates in the AST shape only via the full Sprint 17
-            // expansion; here we just keep it bound so callers see it.
-            let _ = &key;
-            arms.push(CaseArm { span, cond, body });
+            arms.push((values, body));
         }
+
+        let whole = join(kw.span, end_tok.span);
+        // Build the membership predicate for one arm: OR over each value of
+        // `TEST(key, value)`.
+        let make_pred = |values: &[Expr]| -> Expr {
+            let mut it = values.iter();
+            let first = it.next().expect("select arm has >=1 value");
+            let mut acc = select_test_expr(&key_name, key_span, test.as_ref(), first);
+            for v in it {
+                let rhs = select_test_expr(&key_name, key_span, test.as_ref(), v);
+                acc = Expr::BinOp {
+                    span: whole,
+                    op: BinOp::Or,
+                    lhs: Box::new(acc),
+                    rhs: Box::new(rhs),
+                };
+            }
+            acc
+        };
+        let preds: Vec<(Expr, Vec<Expr>)> = arms
+            .into_iter()
+            .map(|(vals, body)| (make_pred(&vals), body))
+            .collect();
+        let if_tree = build_if_tree(preds, otherwise, whole);
+
+        // Wrap in `begin let %select-key-N = <key>; <if-tree> end` so the key
+        // is evaluated once.
+        let let_stmt = Expr::Let {
+            span: key_span,
+            binder: key_name,
+            value: Box::new(key),
+        };
+        Ok(Expr::Begin {
+            span: whole,
+            body: vec![let_stmt, if_tree],
+        })
     }
 
     fn parse_hash_literal(&mut self) -> Result<Expr, Diagnostic> {
@@ -1332,35 +1387,36 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// `case test1 => body1; test2 => body2; … otherwise => bodyN; end case`
+    ///
+    /// Desugared into an `if`/`elseif`-tree (see [`Self::parse_select`] for
+    /// the rationale). Each arm's `test` is a boolean expression used
+    /// verbatim as the `if` condition — no key, no membership test.
     fn parse_case(&mut self) -> Result<Expr, Diagnostic> {
         let kw = self.bump();
-        let mut arms = Vec::new();
-        let mut otherwise: Option<Box<Expr>> = None;
+        let mut arms: Vec<(Expr, Vec<Expr>)> = Vec::new();
+        let mut otherwise: Option<Vec<Expr>> = None;
+        let end_tok;
         loop {
             let t = self.peek();
             if t.kind == TokenKind::KwEnd {
-                let end_tok = self.bump();
+                end_tok = self.bump();
                 self.consume_optional_kw("case");
-                return Ok(Expr::Case {
-                    span: join(kw.span, end_tok.span),
-                    arms,
-                    otherwise,
-                });
+                break;
             }
             if t.kind == TokenKind::KwOtherwise {
                 self.bump();
                 self.expect(TokenKind::Arrow, "`=>` after `otherwise`")?;
-                let body = self.parse_body_until_end()?;
-                let span = body_span(&body, t.span);
-                otherwise = Some(Box::new(Expr::Begin { span, body }));
+                otherwise = Some(self.parse_case_arm_body()?);
                 continue;
             }
             let cond = self.parse_expr_full()?;
             self.expect(TokenKind::Arrow, "`=>` after case condition")?;
             let body = self.parse_case_arm_body()?;
-            let span = join(cond.span(), body.last().map(|e| e.span()).unwrap_or(cond.span()));
-            arms.push(CaseArm { span, cond, body });
+            arms.push((cond, body));
         }
+        let whole = join(kw.span, end_tok.span);
+        Ok(build_if_tree(arms, otherwise, whole))
     }
 
     fn parse_case_arm_body(&mut self) -> Result<Vec<Expr>, Diagnostic> {
@@ -1368,6 +1424,13 @@ impl<'a> Parser<'a> {
         loop {
             let t = self.peek();
             if matches!(t.kind, TokenKind::KwEnd | TokenKind::KwOtherwise) {
+                return Ok(body);
+            }
+            // Empty consequent: `value => ;` or `value =>` immediately before
+            // the next arm / `end`. A leading `;` with nothing before it
+            // means this arm has no body (Dylan: the arm yields `#f`).
+            if matches!(t.kind, TokenKind::Semicolon) {
+                self.bump();
                 return Ok(body);
             }
             body.push(self.parse_expr_full()?);
@@ -3327,6 +3390,70 @@ fn body_span(body: &[Expr], fallback: Span) -> Span {
     let first = body[0].span();
     let last = body[body.len() - 1].span();
     join(first, last)
+}
+
+/// Wrap an arm body (a `Vec<Expr>`) as a single `Expr` for an `if`
+/// branch. An empty body (a `select`/`case` arm with no consequent,
+/// e.g. `5 => ;`) yields `#f` — the Dylan value of an empty consequent.
+/// A single-element body unwraps to that element; otherwise a `begin …
+/// end` sequences the statements.
+fn body_to_expr(mut body: Vec<Expr>, span: Span) -> Expr {
+    match body.len() {
+        0 => Expr::Bool(span, false),
+        1 => body.pop().unwrap(),
+        _ => {
+            let bspan = body_span(&body, span);
+            Expr::Begin { span: bspan, body }
+        }
+    }
+}
+
+/// Build one `select`-arm membership test: `key = value` by default, or
+/// `test(key, value)` when the `select` head used `by <test>`. `key_name`
+/// is the synthetic once-evaluated binder introduced by `parse_select`.
+fn select_test_expr(key_name: &str, key_span: Span, test: Option<&Expr>, value: &Expr) -> Expr {
+    let key_ref = Expr::Ident(key_span, key_name.to_string());
+    match test {
+        None => Expr::BinOp {
+            span: value.span(),
+            op: BinOp::Eq,
+            lhs: Box::new(key_ref),
+            rhs: Box::new(value.clone()),
+        },
+        Some(t) => Expr::Call {
+            span: value.span(),
+            callee: Box::new(t.clone()),
+            args: vec![key_ref, value.clone()],
+        },
+    }
+}
+
+/// Fold `(cond, body)` arms + an optional `otherwise` body into a nested
+/// `if (cond1) body1 elseif (cond2) body2 … else otherwise end` tree. The
+/// shared desugaring target for both `select` and `case`. With no arms it
+/// is just the `otherwise` body (or `#f`).
+fn build_if_tree(
+    arms: Vec<(Expr, Vec<Expr>)>,
+    otherwise: Option<Vec<Expr>>,
+    span: Span,
+) -> Expr {
+    // Innermost else-branch: the otherwise body, or `#f` if absent.
+    let mut else_: Option<Box<Expr>> = otherwise.map(|b| Box::new(body_to_expr(b, span)));
+    // Fold from the last arm backward so the first arm ends up outermost.
+    for (cond, body) in arms.into_iter().rev() {
+        let then_ = body_to_expr(body, span);
+        else_ = Some(Box::new(Expr::If {
+            span,
+            cond: Box::new(cond),
+            then_: Box::new(then_),
+            else_,
+        }));
+    }
+    match else_ {
+        Some(e) => *e,
+        // No arms and no otherwise: empty select/case ⇒ `#f`.
+        None => Expr::Bool(span, false),
+    }
 }
 
 fn parse_int_lit(s: &str, radix: u32) -> Option<i128> {
