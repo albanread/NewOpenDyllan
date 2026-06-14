@@ -14,10 +14,38 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
 | OpenDylan corpus lower (`dump-dfm`) | _baseline TBD_ | |
 | OpenDylan corpus build/run | 0 | the headline goal to move |
+| Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
+| Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
 
 ## Iterations
 
 *(newest first)*
+
+### 2026-06-14 — Iteration 4: definition macros (engine feature) — `define benchmark`
+
+- **Demand:** the gabriel benchmark files wrap pure functions in
+  `define benchmark NAME () body end` — a *definition* macro. Our engine had **no
+  definition-macro support** (the marquee missing macro feature). A hand-extracted
+  `tak` already builds to an exe and runs correctly, so the wrapper was the blocker.
+- **Research (agent):** the collect→expand two-pass and the rule parser already
+  handle this shape; the gap is recognising a top-level `define <word> … end`
+  (an `Item::DefineOther` whose keyword is a registered macro) and expanding it by
+  re-parsing the substituted expansion as a top-level **item**, not an expression.
+- **Fix (`src/nod-macro/src/lib.rs`):** added `expand_definition_macro` (mirrors
+  `expand_one` but re-parses via `parse_module_with_macros_rust` → `Item`) and a
+  span-based `call_site_fragments_span`; `expand_module` now rewrites
+  `DefineOther{keyword ∈ table}` through it. Added the first definition macro,
+  `benchmark`, to `stdlib/macros.dylan`.
+- **Result:** `define benchmark foo () 3 + 4 end` → `define function foo` →
+  **builds to an `.exe` and runs (prints 7)**. The first definition macro in
+  NewOpenDylan. In-tree fixtures unchanged (55/55).
+- **Caveats / follow-ups:** verified via `--parse-with-rust`; the DEFAULT pipeline
+  routes through the Dylan parser, which doesn't yet recognise definition-macro
+  calls (panics "define: expected a define-body word") — needs Dylan-parser
+  awareness or a Rust fallback in the lowering path. Nested body-macro expansion
+  inside a definition-macro body + fine-grained diagnostics need an origins-based
+  span rewrite. Real gabriel files additionally need `benchmark-repeat` +
+  `assert-equal`.
 
 ### 2026-06-14 — Iteration 3: route library body-macros as macro calls (parser bug)
 

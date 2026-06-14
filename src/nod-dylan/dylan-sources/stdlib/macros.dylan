@@ -183,6 +183,19 @@ define macro repeat
          end }
 end macro;
 
+// ─── benchmark definition macro ──────────────────────────────────────────────
+//
+// The first NewOpenDylan DEFINITION macro: `define benchmark NAME () body end`
+// expands to a plain `define function NAME () body end`. It exercises the macro
+// engine's definition-macro path — the substituted expansion re-parses as a
+// top-level item (a definition), not an expression. The gabriel benchmark suite
+// wraps each benchmark body in `define benchmark`.
+
+define macro benchmark
+  { define benchmark ?name:name () ?body:body end }
+    => { define function ?name () ?body end }
+end macro;
+
 // NOTE: an indexed `dotimes (i below N) … end` counted loop is deferred.
 // A body-shaped macro whose head is `(var <sep> expr)` with a separator
 // other than `for-each`'s special-cased `in` does not parse — the head

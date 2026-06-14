@@ -1320,9 +1320,33 @@ pub fn expand_module(
     // post-expansion and downstream passes (lowering) treat them as
     // `Unsupported`.
     module.items.retain(|it| !matches!(it, Item::DefineMacro { .. }));
-    for it in &mut module.items {
-        expand_item(it, &mut ctx, &mut errs);
+    // Rebuild the item list. A top-level `define <word> … end` whose `<word>` is
+    // a registered macro is a DEFINITION-MACRO call: expand it to the item it
+    // produces, then expand inside that. Everything else expands in place. (The
+    // macro table is already fully populated by `collect_macros`.)
+    let mut new_items: Vec<Item> = Vec::with_capacity(module.items.len());
+    for mut it in std::mem::take(&mut module.items) {
+        let def = match &it {
+            Item::DefineOther { keyword, .. } => ctx.table.defs.get(keyword).cloned(),
+            _ => None,
+        };
+        if let Some(def) = def {
+            match expand_definition_macro(&it, &def, &mut ctx) {
+                Ok(mut produced) => {
+                    expand_item(&mut produced, &mut ctx, &mut errs);
+                    new_items.push(produced);
+                }
+                Err(e) => {
+                    errs.push(e);
+                    new_items.push(it);
+                }
+            }
+        } else {
+            expand_item(&mut it, &mut ctx, &mut errs);
+            new_items.push(it);
+        }
     }
+    module.items = new_items;
     if errs.is_empty() { Ok(()) } else { Err(errs) }
 }
 
@@ -1586,6 +1610,86 @@ fn expand_one(
     Ok(parsed)
 }
 
+/// Expand a definition macro: a top-level `define <word> … end` whose `<word>`
+/// is a registered macro. Mirrors [`expand_one`] but re-parses the substituted
+/// expansion as a top-level module **item** (a definition), not an expression.
+fn expand_definition_macro(
+    it: &Item,
+    def: &MacroDef,
+    ctx: &mut ExpansionCtx<'_>,
+) -> Result<Item, MacroError> {
+    if def.rules.is_empty() {
+        return Err(MacroError::MalformedDefinition {
+            span: def.source_span,
+            name: def.name.clone(),
+            detail: "no rules".into(),
+        });
+    }
+    let sp = it.span();
+    let (call_text, call_frags) = call_site_fragments_span(sp, ctx.source, &def.name)?;
+    let mut chosen: Option<(usize, Bindings)> = None;
+    with_call_site_source(&call_text, || {
+        for (idx, rule) in def.rules.iter().enumerate() {
+            if let Some(b) = match_pattern(&rule.pattern, &call_frags) {
+                chosen = Some((idx, b));
+                return;
+            }
+        }
+    });
+    let (rule_idx, bindings) = chosen.ok_or_else(|| MacroError::NoApplicableRule {
+        call_span: sp,
+        name: def.name.clone(),
+        rule_count: def.rules.len(),
+    })?;
+    let rule = &def.rules[rule_idx];
+    let mut pv_names = collect_pattern_var_names(&rule.pattern);
+    for n in ctx.table.defs.keys() {
+        pv_names.insert(n.clone());
+    }
+    let binders = collect_template_binders(&rule.template);
+    let nonce = ctx.fresh_nonce();
+    let out = substitute_with_binders(
+        &rule.template,
+        &bindings,
+        nonce,
+        &call_text,
+        ctx.source,
+        sp.file_id,
+        &pv_names,
+        &binders,
+    );
+    // Re-lex + re-parse the expansion as a top-level module item (a definition,
+    // not an expression). Lex against the call-site file id so produced spans
+    // reference a valid file (offsets are into the expansion buffer — fine for
+    // lowering, which reads names/values from the AST, not source by span). Use
+    // the canonical Rust parser directly so an installed `--parse-with-dylan`
+    // override never routes this internal expansion through the partial Dylan
+    // parser; seed the known macro names so body-shaped macro calls in the body
+    // still parse.
+    let toks = lex(&out.text, sp.file_id);
+    let known: std::collections::HashSet<String> = ctx.table.defs.keys().cloned().collect();
+    let module = nod_reader::parse_module_with_macros_rust(&out.text, &toks, None, &known).map_err(
+        |ds| MacroError::ReparseFailed {
+            call_span: sp,
+            name: def.name.clone(),
+            detail: ds
+                .into_iter()
+                .next()
+                .map(|d| d.message)
+                .unwrap_or_else(|| "definition-macro expansion did not parse".into()),
+        },
+    )?;
+    module
+        .items
+        .into_iter()
+        .next()
+        .ok_or_else(|| MacroError::ReparseFailed {
+            call_span: sp,
+            name: def.name.clone(),
+            detail: "definition-macro expansion produced no item".into(),
+        })
+}
+
 fn set_top_span(e: &mut Expr, sp: Span) {
     match e {
         Expr::Integer(s, _)
@@ -1632,7 +1736,16 @@ fn call_site_fragments(
     source: &SourceMap,
     macro_name: &str,
 ) -> Result<(String, Vec<Fragment>), MacroError> {
-    let sp = e.span();
+    call_site_fragments_span(e.span(), source, macro_name)
+}
+
+/// Span-based variant of [`call_site_fragments`]. Definition macros expand an
+/// `Item` (`define <word> … end`) whose call site is a span, not an `Expr`.
+fn call_site_fragments_span(
+    sp: Span,
+    source: &SourceMap,
+    macro_name: &str,
+) -> Result<(String, Vec<Fragment>), MacroError> {
     let file_src = source.source(sp.file_id);
     // Re-lex the entire file, then keep tokens within `sp`. (Cheap; we
     // could partition once per file via a future cache.)
