@@ -12,7 +12,7 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 58 / 161 | 34 → 47 → 52 → 55 → 58 (`for` completion) |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 59 / 161 | … → 55 → 58 (`for`) → 59 (func-refs) |
 | OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
@@ -20,6 +20,40 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 ## Iterations
 
 *(newest first)*
+
+### 2026-06-14 — Iteration 14: AOT levers — LNK2005 gate + block-return + func-refs
+
+Process: a design→adversarial-challenge→synthesis workflow produced vetted go/no-go
+plans ([deep-levers-plan.md](deep-levers-plan.md)); the AOT levers were all gated on
+one infra bug, so I fixed that first, then agents (in worktrees off the fixed main,
+so they could build+run-verify for the first time) implemented the two GO plans, and
+I **re-verified each by building+running exes on main** before merging.
+
+- **GATE — cold-build `LNK2005 nod_user_main` fixed** (`nod-aot-stub` crate). The
+  default stub now lives in its own crate → its own object → MSVC on-demand archive
+  extraction reliably drops it; nod-runtime's CGU partition can no longer merge it
+  with an always-pulled module. (`codegen-units=1` was the WRONG fix.) This also
+  fixes AOT linking for fresh clones / CI / self-rebuild. Guard: `smoke-aot.sh`.
+- **block-return** — `block (return) … return(x) … end` crashed in built exes. Three
+  compounding bugs: AOT safepoint shadow-stack never truncated on NLX (now symmetric
+  with the JIT path), `extern "C"`→`"C-unwind"` on the safepoint shims (unmasked the
+  diagnostic), and block_id ORed bit 62 → overflowed the fixnum domain (now bit 61).
+  Verified build+run: `trial(5)=99`, `trial(1)=7`, cleanup/nested correct, exit 0;
+  negative control crashes (load-bearing); `error("boom")` still crash-dumps.
+  **0 corpus-compile gain** (runtime fix — dump-dfm never ran the code) but real:
+  `block(return)` programs now RUN instead of crashing.
+- **func-refs** — `\==`/`\~=`/`instance?` as VALUES crashed built exes
+  (`no registered function ==`; shims were JIT-only). Registered the shims in
+  `ensure_operator_shims_registered` (runs in BOTH JIT and AOT startup) + added
+  `operator_arity` entries. `~=` is value-semantics (via `nod_object_equal_p`), not
+  identity. Verified build+run: `1,1,1,0` and `\~=` value-semantics proof.
+  **Corpus 58 → 59** (`apple-dylan-test-suite/test-collection3`).
+- Guards: in-tree 55/55, nod-runtime 144/0, nod-sema 44/0, smoke-aot now 6/6
+  (added `blockreturn` + `funcref` cases). See [[aot-build-run-verification]].
+- Note: one self-inflicted scare — a hasty `git merge --ff-only` aborted on a dirty
+  `Cargo.lock` and I force-deleted the (unmerged) block-return branch; recovered the
+  dangling commit via reflog and merged cleanly. Lesson: don't `branch -D` before
+  confirming the merge landed.
 
 ### 2026-06-14 — Iteration 13: fix `head(#())`/`tail(#())` returning garbage (runtime)
 

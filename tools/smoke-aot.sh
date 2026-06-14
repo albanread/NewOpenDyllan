@@ -66,6 +66,30 @@ define method answer () 6 * 7 end method;
 define function main () => () format-out("%d\n", answer()); end function main;
 EOF
 
+# block(return) non-local exit through a built AOT exe (guards the iter-14 fix:
+# AOT safepoint-stack truncation + extern "C-unwind" + block_id fixnum domain).
+case_run blockreturn "99" <<'EOF'
+Module: t
+define function trial (n)
+  block (return)
+    if (n > 3) return(99) end;
+    7
+  end
+end function;
+define function main () => () format-out("%d\n", trial(5)); end function main;
+EOF
+
+# == / instance? as first-class function references in a built exe (guards the
+# iter-14 func-ref shims being live in the AOT runtime path, not JIT-only).
+case_run funcref "1" <<'EOF'
+Module: t
+define function b (x) => (n) if (x) 1 else 0 end end function;
+define function main () => ()
+  let eq = \==;
+  format-out("%d\n", b(eq(7, 7)));
+end function main;
+EOF
+
 echo ""
 if [ "$fail" = 0 ]; then echo "AOT SMOKE OK (all cases built + ran with expected output)."; else
   echo "AOT SMOKE FAILED."; exit 1; fi
