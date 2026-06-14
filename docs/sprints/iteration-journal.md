@@ -12,7 +12,7 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 55 / 161 | 34 → 47 (macros) → 52 (bindings) → 55 (lowering) |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 58 / 161 | 34 → 47 → 52 → 55 → 58 (`for` completion) |
 | OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
@@ -20,6 +20,29 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 ## Iterations
 
 *(newest first)*
+
+### 2026-06-14 — Iteration 12: complete the Dylan `for` loop (agent, worktree) — compile 55 → 58
+
+- **What:** generalised `for` lowering (`src/nod-sema/src/lower.rs`) from single-numeric
+  to the full clause vocabulary — **step** clauses (`var = init then next`),
+  **multiple** comma-separated clauses, **`until:`/`while:`** keyword clauses, and the
+  **`finally`** result. Implements Dylan's **simultaneous-step** semantics (each
+  clause's next-value is computed into a temp, then all assigned — so a later clause's
+  step reads the *old* bindings) and makes numeric `to` **direction-aware** (`by -1`
+  ⇒ `>=`, fixing a latent bug in the old single-numeric path).
+- **Verified by me on clean main (build → exe → run):** `sumfin(5)=15`
+  (numeric+step+finally), descending `by -1` `=15`, `while:` `=10`, and the
+  parallel-step proof `sumlist(#(10,20,30))=60` (a sequential step would give the wrong
+  sum). Regression: in-tree 55/55 (ast+dfm), nod-sema **44/44** (7 new for-desugar
+  tests), smoke-aot 4/4, sum 1..100=5050 still works.
+- **Corpus 55 → 58:** gabriel `div2`, `browse`, `destru` newly lower (were blocked on
+  `for…finally`/step/multi-clause). The benchmark EXEs still hit *other* pre-existing
+  runtime gaps beyond `for` (`tail(#())` non-empty, `block(return)` exit path,
+  `<vector>`/`limited` classes) — out of this task's scope.
+- **Pattern confirmed:** this is the 4th agent (all *lowering*) to hold up under my
+  build+run review (iters 9, 11-B, 12), vs 3 *AOT/runtime/parser* agents reverted.
+  Agents + a hard build+run gate work well for lowering; delicate AOT/parser work I keep
+  in hand. See [[aot-build-run-verification]].
 
 ### 2026-06-14 — Iteration 11: `#key` params + computed-callee calls (agent B, kept); agents A & C reverted
 
