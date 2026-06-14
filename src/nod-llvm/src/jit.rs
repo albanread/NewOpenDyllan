@@ -41,6 +41,10 @@ use crate::codegen::{
     NOD_BYTE_STRING_ALLOCATE_SYMBOL, NOD_BYTE_STRING_COPY_BYTES_SYMBOL,
     NOD_BYTE_STRING_ELEMENT_SETTER_SYMBOL, NOD_BYTE_STRING_ELEMENT_SYMBOL,
     NOD_BYTE_STRING_SIZE_SYMBOL,
+    // Collection-classes lever (Part A2) — <bit-vector> + word bitwise ops.
+    NOD_BIT_VECTOR_ALLOCATE_SYMBOL, NOD_BIT_VECTOR_COUNT_SYMBOL, NOD_BIT_VECTOR_REF_SYMBOL,
+    NOD_BIT_VECTOR_SET_SYMBOL, NOD_BIT_VECTOR_SIZE_SYMBOL,
+    NOD_ASH_SYMBOL, NOD_LOGAND_SYMBOL, NOD_LOGIOR_SYMBOL, NOD_LOGNOT_SYMBOL, NOD_LOGXOR_SYMBOL,
     // Sprint 24 — closures.
     NOD_CELL_GET_SYMBOL, NOD_CELL_SET_SYMBOL, NOD_ENV_CELL_SYMBOL,
     NOD_MAKE_CELL_SYMBOL, NOD_MAKE_CLOSURE_SYMBOL, NOD_MAKE_ENVIRONMENT_SYMBOL,
@@ -399,6 +403,47 @@ impl<'ctx> Jit<'ctx> {
             (
                 module.get_function(NOD_BYTE_STRING_COPY_BYTES_SYMBOL),
                 nod_runtime::nod_byte_string_copy_bytes as *const () as *mut std::ffi::c_void,
+            ),
+            // Collection-classes lever (Part A2) — <bit-vector> + word bitwise ops.
+            (
+                module.get_function(NOD_BIT_VECTOR_ALLOCATE_SYMBOL),
+                nod_runtime::nod_bit_vector_allocate as *const () as *mut std::ffi::c_void,
+            ),
+            (
+                module.get_function(NOD_BIT_VECTOR_REF_SYMBOL),
+                nod_runtime::nod_bit_vector_ref as *const () as *mut std::ffi::c_void,
+            ),
+            (
+                module.get_function(NOD_BIT_VECTOR_SET_SYMBOL),
+                nod_runtime::nod_bit_vector_set as *const () as *mut std::ffi::c_void,
+            ),
+            (
+                module.get_function(NOD_BIT_VECTOR_SIZE_SYMBOL),
+                nod_runtime::nod_bit_vector_size as *const () as *mut std::ffi::c_void,
+            ),
+            (
+                module.get_function(NOD_BIT_VECTOR_COUNT_SYMBOL),
+                nod_runtime::nod_bit_vector_count as *const () as *mut std::ffi::c_void,
+            ),
+            (
+                module.get_function(NOD_LOGAND_SYMBOL),
+                nod_runtime::nod_logand as *const () as *mut std::ffi::c_void,
+            ),
+            (
+                module.get_function(NOD_LOGIOR_SYMBOL),
+                nod_runtime::nod_logior as *const () as *mut std::ffi::c_void,
+            ),
+            (
+                module.get_function(NOD_LOGXOR_SYMBOL),
+                nod_runtime::nod_logxor as *const () as *mut std::ffi::c_void,
+            ),
+            (
+                module.get_function(NOD_LOGNOT_SYMBOL),
+                nod_runtime::nod_lognot as *const () as *mut std::ffi::c_void,
+            ),
+            (
+                module.get_function(NOD_ASH_SYMBOL),
+                nod_runtime::nod_ash as *const () as *mut std::ffi::c_void,
             ),
             // Sprint 24 — closures.
             (
@@ -1412,6 +1457,17 @@ fn standard_extern_addresses() -> Vec<(&'static str, *mut std::ffi::c_void)> {
         (NOD_BYTE_STRING_ELEMENT_SYMBOL, nod_runtime::nod_byte_string_element as *const () as *mut std::ffi::c_void),
         (NOD_BYTE_STRING_ELEMENT_SETTER_SYMBOL, nod_runtime::nod_byte_string_element_setter as *const () as *mut std::ffi::c_void),
         (NOD_BYTE_STRING_COPY_BYTES_SYMBOL, nod_runtime::nod_byte_string_copy_bytes as *const () as *mut std::ffi::c_void),
+        // Collection-classes lever (Part A2) — <bit-vector> + word bitwise ops.
+        (NOD_BIT_VECTOR_ALLOCATE_SYMBOL, nod_runtime::nod_bit_vector_allocate as *const () as *mut std::ffi::c_void),
+        (NOD_BIT_VECTOR_REF_SYMBOL, nod_runtime::nod_bit_vector_ref as *const () as *mut std::ffi::c_void),
+        (NOD_BIT_VECTOR_SET_SYMBOL, nod_runtime::nod_bit_vector_set as *const () as *mut std::ffi::c_void),
+        (NOD_BIT_VECTOR_SIZE_SYMBOL, nod_runtime::nod_bit_vector_size as *const () as *mut std::ffi::c_void),
+        (NOD_BIT_VECTOR_COUNT_SYMBOL, nod_runtime::nod_bit_vector_count as *const () as *mut std::ffi::c_void),
+        (NOD_LOGAND_SYMBOL, nod_runtime::nod_logand as *const () as *mut std::ffi::c_void),
+        (NOD_LOGIOR_SYMBOL, nod_runtime::nod_logior as *const () as *mut std::ffi::c_void),
+        (NOD_LOGXOR_SYMBOL, nod_runtime::nod_logxor as *const () as *mut std::ffi::c_void),
+        (NOD_LOGNOT_SYMBOL, nod_runtime::nod_lognot as *const () as *mut std::ffi::c_void),
+        (NOD_ASH_SYMBOL, nod_runtime::nod_ash as *const () as *mut std::ffi::c_void),
         (NOD_MAKE_CELL_SYMBOL, nod_runtime::nod_make_cell as *const () as *mut std::ffi::c_void),
         (NOD_CELL_GET_SYMBOL, nod_runtime::nod_cell_get as *const () as *mut std::ffi::c_void),
         (NOD_CELL_SET_SYMBOL, nod_runtime::nod_cell_set as *const () as *mut std::ffi::c_void),

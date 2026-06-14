@@ -431,6 +431,18 @@ pub const NOD_BYTE_STRING_ELEMENT_SYMBOL: &str = "nod_byte_string_element";
 pub const NOD_BYTE_STRING_ELEMENT_SETTER_SYMBOL: &str = "nod_byte_string_element_setter";
 pub const NOD_BYTE_STRING_COPY_BYTES_SYMBOL: &str = "nod_byte_string_copy_bytes";
 
+// Collection-classes lever (Part A2) — <bit-vector> + word bitwise ops.
+pub const NOD_BIT_VECTOR_ALLOCATE_SYMBOL: &str = "nod_bit_vector_allocate";
+pub const NOD_BIT_VECTOR_REF_SYMBOL: &str = "nod_bit_vector_ref";
+pub const NOD_BIT_VECTOR_SET_SYMBOL: &str = "nod_bit_vector_set";
+pub const NOD_BIT_VECTOR_SIZE_SYMBOL: &str = "nod_bit_vector_size";
+pub const NOD_BIT_VECTOR_COUNT_SYMBOL: &str = "nod_bit_vector_count";
+pub const NOD_LOGAND_SYMBOL: &str = "nod_logand";
+pub const NOD_LOGIOR_SYMBOL: &str = "nod_logior";
+pub const NOD_LOGXOR_SYMBOL: &str = "nod_logxor";
+pub const NOD_LOGNOT_SYMBOL: &str = "nod_lognot";
+pub const NOD_ASH_SYMBOL: &str = "nod_ash";
+
 /// Sprint 20b: `(dylan-name-as-emitted-by-lower, runtime-symbol, arity)`.
 /// The lower pass emits the LHS name as the DirectCall callee; codegen
 /// matches it here and emits a call into the RHS extern.
@@ -484,6 +496,17 @@ const SPRINT_20B_PRIMITIVES: &[(&str, &str, usize)] = &[
     ("nod_byte_string_element", NOD_BYTE_STRING_ELEMENT_SYMBOL, 2),
     ("nod_byte_string_element_setter", NOD_BYTE_STRING_ELEMENT_SETTER_SYMBOL, 3),
     ("nod_byte_string_copy_bytes", NOD_BYTE_STRING_COPY_BYTES_SYMBOL, 5),
+    // Collection-classes lever (Part A2) — <bit-vector> + word bitwise ops.
+    ("nod_bit_vector_allocate", NOD_BIT_VECTOR_ALLOCATE_SYMBOL, 2),
+    ("nod_bit_vector_ref", NOD_BIT_VECTOR_REF_SYMBOL, 2),
+    ("nod_bit_vector_set", NOD_BIT_VECTOR_SET_SYMBOL, 3),
+    ("nod_bit_vector_size", NOD_BIT_VECTOR_SIZE_SYMBOL, 1),
+    ("nod_bit_vector_count", NOD_BIT_VECTOR_COUNT_SYMBOL, 1),
+    ("nod_logand", NOD_LOGAND_SYMBOL, 2),
+    ("nod_logior", NOD_LOGIOR_SYMBOL, 2),
+    ("nod_logxor", NOD_LOGXOR_SYMBOL, 2),
+    ("nod_lognot", NOD_LOGNOT_SYMBOL, 1),
+    ("nod_ash", NOD_ASH_SYMBOL, 2),
     // Sprint 55 — generic-name + class-name classifiers for the Dylan shim.
     ("nod_is_generic_defined", NOD_IS_GENERIC_DEFINED_SYMBOL, 1),
     ("nod_is_class_defined", NOD_IS_CLASS_DEFINED_SYMBOL, 1),
@@ -3448,6 +3471,50 @@ impl<'ctx, 'a> Emit<'ctx, 'a> {
                     .try_as_basic_value()
                     .basic()
                     .ok_or_else(|| CodegenError::Builder("nod_is_instance_of returned void".into()))?)
+            }
+            // Collection-classes lever — `<vector>` / `<array>` /
+            // `<simple-vector>`: a `<simple-object-vector>` IS one of these
+            // but its CPL doesn't carry the abstract id (SOV is a seed
+            // class on `<object>`), so neither check alone suffices. Emit
+            //   (exact-id SOV fast path) OR nod_is_instance_of(v, id)
+            // — the fast path catches real SOVs, the CPL walk catches
+            // `<bit-vector>` / user `make(<vector>)`-results. Combine on i1
+            // and retag once.
+            ClassCheck::VectorOrUserClass { id, .. } => {
+                // SOV fast path → tagged-bool Word.
+                let sov_word = self
+                    .emit_wrapper_class_check(v, ClassId::SIMPLE_OBJECT_VECTOR)?
+                    .into_int_value();
+                let sov_i1 = self.untag_bool_to_i1(sov_word)?;
+                // CPL walk → tagged-bool Word.
+                let is_inst_fn = match self.module.get_function(NOD_IS_INSTANCE_OF_SYMBOL) {
+                    Some(f) => f,
+                    None => {
+                        let ty = i64ty.fn_type(&[i64ty.into(), i64ty.into()], false);
+                        self.module.add_function(NOD_IS_INSTANCE_OF_SYMBOL, ty, None)
+                    }
+                };
+                let class_const = i64ty.const_int(*id as u64, false);
+                let site = self
+                    .builder
+                    .build_call(
+                        is_inst_fn,
+                        &[v.into(), class_const.into()],
+                        "tcheck.vec.cpl",
+                    )
+                    .map_err(map_err)?;
+                let cpl_word = site
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| {
+                        CodegenError::Builder("nod_is_instance_of returned void".into())
+                    })?
+                    .into_int_value();
+                let cpl_i1 = self.untag_bool_to_i1(cpl_word)?;
+                let either = b
+                    .build_or(sov_i1, cpl_i1, "tcheck.vec.or")
+                    .map_err(map_err)?;
+                self.retag_bool(either)
             }
             // Anything else: stub. Sprint 12 wires class-id dispatch.
             ClassCheck::Unsupported { .. } => Ok(i64ty.const_zero().into()),

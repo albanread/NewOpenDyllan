@@ -264,6 +264,15 @@ pub enum ClassCheck {
     /// helper (walks the target object's class CPL). Sprint 12 adds
     /// this; the `class_id` is the runtime ClassId, baked into the IR.
     UserClass { id: u32, name: String },
+    /// Collection-classes lever — `instance?(x, <vector>)` (and `<array>`
+    /// / `<simple-vector>`): the abstract vector/array classes whose
+    /// CPL a `<simple-object-vector>` does NOT contain (SOV is a runtime
+    /// seed class parented directly on `<object>`), yet which an SOV must
+    /// answer `#t` for. Codegen emits the exact-id `<simple-object-vector>`
+    /// fast path OR'd with a `nod_is_instance_of(v, id)` CPL walk, so both
+    /// a real SOV and a `<bit-vector>` (whose CPL DOES contain the class)
+    /// answer `#t`. `id` is the abstract class's runtime ClassId.
+    VectorOrUserClass { id: u32, name: String },
     /// Anything we can't yet test — codegen folds to a constant `#f`.
     /// `name` is preserved for diagnostics + DFM dumps.
     Unsupported { name: &'static str },
@@ -280,6 +289,7 @@ impl ClassCheck {
             ClassCheck::Character => "<character>",
             ClassCheck::EmptyList => "<empty-list>",
             ClassCheck::UserClass { name, .. } => name.as_str(),
+            ClassCheck::VectorOrUserClass { name, .. } => name.as_str(),
             ClassCheck::Unsupported { name } => name,
         }
     }
