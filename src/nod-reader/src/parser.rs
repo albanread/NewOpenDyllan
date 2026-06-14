@@ -11,7 +11,7 @@ use crate::ast::{
     BinOp, Binder, CaseArm, ExceptionClause, Expr, ForClause, FromForClause, ImportSet,
     ImportSpec, Item, LibraryUseClause, LocalMethodDecl, Modifier, Module, ModuleUseClause,
     NumericForClause, Param, ReturnRest, ReturnSig, ReturnValue, SlotAllocation, SlotDef,
-    Statement, UnOp,
+    Statement, StepForClause, UnOp,
 };
 use crate::fragments::Fragment;
 use crate::lexer::Preamble;
@@ -1647,12 +1647,68 @@ impl<'a> Parser<'a> {
     fn parse_for_clause(&mut self) -> Result<ForClause, Diagnostic> {
         // `var from EXPR [to|below|above EXPR] [by EXPR]`
         // `var in EXPR`
+        // `var = INIT [then NEXT]`            (explicit-step)
+        // `var keyed-by KEY in EXPR`          (keyed iteration)
+        // `until: COND` / `while: COND`       (keyword terminator clauses)
+
+        // Leading keyword clause with no variable: `until: cond` / `while: cond`.
+        if matches!(self.peek_kind(), TokenKind::KeywordColon) {
+            let kt = self.peek();
+            let kw = self.token_text(kt).trim_end_matches(':').to_string();
+            if kw == "until" || kw == "while" {
+                self.bump();
+                let cond = self.parse_expr_until_for_terminator()?;
+                let span = join(kt.span, cond.span());
+                return Ok(if kw == "while" {
+                    ForClause::While { span, cond }
+                } else {
+                    ForClause::Until { span, cond }
+                });
+            }
+        }
+
         let var_tok = self.expect(TokenKind::Ident, "for-clause variable")?;
         let var = self.token_text(var_tok).to_string();
         // Optional :: TYPE
         if matches!(self.peek_kind(), TokenKind::ColonColon) {
             self.bump();
             let _ = self.parse_postfix()?;
+        }
+        // Explicit-step clause: `var = init [then next]`.
+        if matches!(self.peek_kind(), TokenKind::Equal) {
+            self.bump();
+            let init = self.parse_expr_until_for_terminator()?;
+            let next = if self.peek_ident_is("then") {
+                self.bump();
+                Some(self.parse_expr_until_for_terminator()?)
+            } else {
+                None
+            };
+            let last = next
+                .as_ref()
+                .map(|e| e.span())
+                .unwrap_or_else(|| init.span());
+            let span = join(var_tok.span, last);
+            return Ok(ForClause::Step(Box::new(StepForClause {
+                span,
+                var,
+                init,
+                next,
+            })));
+        }
+        // Keyed iteration: `var keyed-by KEY [:: TYPE] in coll`.
+        if self.peek_ident_is("keyed-by") {
+            self.bump();
+            let key_tok = self.expect(TokenKind::Ident, "key variable after `keyed-by`")?;
+            let key = self.token_text(key_tok).to_string();
+            if matches!(self.peek_kind(), TokenKind::ColonColon) {
+                self.bump();
+                let _ = self.parse_postfix()?;
+            }
+            self.expect_ident_keyword("in")?;
+            let coll = self.parse_expr_until_for_terminator()?;
+            let span = join(var_tok.span, coll.span());
+            return Ok(ForClause::Keyed { span, var, key, coll });
         }
         if self.peek_ident_is("in") {
             self.bump();

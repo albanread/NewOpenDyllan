@@ -708,6 +708,15 @@ pub enum ForClause {
         span: Span,
         cond: Expr,
     },
+    /// `var = init [then next]` — explicit-step iteration.
+    Step(Box<StepForClause>),
+    /// `var keyed-by key in coll` — keyed collection iteration.
+    Keyed {
+        span: Span,
+        var: String,
+        key: String,
+        coll: Expr,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -727,6 +736,14 @@ pub struct FromForClause {
     pub var: String,
     pub from: Expr,
     pub by: Option<Expr>,
+}
+
+#[derive(Clone, Debug)]
+pub struct StepForClause {
+    pub span: Span,
+    pub var: String,
+    pub init: Expr,
+    pub next: Option<Expr>,
 }
 
 #[derive(Clone, Debug)]

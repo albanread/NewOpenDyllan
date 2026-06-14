@@ -624,6 +624,22 @@ fn fmt_for_clause(c: &ForClause, out: &mut String) {
             out.push_str("while ");
             fmt_expr(cond, out);
         }
+        ForClause::Step(s) => {
+            out.push_str(&s.var);
+            out.push_str(" = ");
+            fmt_expr(&s.init, out);
+            if let Some(n) = &s.next {
+                out.push_str(" then ");
+                fmt_expr(n, out);
+            }
+        }
+        ForClause::Keyed { var, key, coll, .. } => {
+            out.push_str(var);
+            out.push_str(" keyed-by ");
+            out.push_str(key);
+            out.push_str(" in ");
+            fmt_expr(coll, out);
+        }
     }
 }
 

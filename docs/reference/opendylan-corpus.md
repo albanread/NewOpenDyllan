@@ -20,7 +20,7 @@ For every `.dylan` file in the language/stdlib suites
 | Stage | Result | Notes |
 |------|--------|-------|
 | **Lex** | **161 / 161** | The lexer handles all real OpenDylan source. |
-| **Parse** (`dump-ast`, lenient) | **121 / 161 (75%)** | The standalone parser accepts most real Dylan syntax (was 101; +20 from the parser fixes below). |
+| **Parse** (`dump-ast`, lenient) | **123 / 161 (76%)** | The standalone parser accepts most real Dylan syntax (was 101; +22 from the parser fixes below). |
 | **Full compile** (`dump-dfm`/`build`) | **0 real tests** | Blocked before codegen for every real test/benchmark. |
 
 So: we can **read** the corpus, we can **parse** most of it, but we cannot yet
@@ -87,10 +87,10 @@ turn a hard *parse wall* into a clean fall-through. Ranked by files unlocked:
    `define table $t = {…};`, `define thread variable *tv* = …;`,
    `define benchmark x = expr;` — `parse_define_other` always `expect(KwEnd)`.
    Fix: accept `;`/`= expr;`-terminated define-forms.
-4. **`for` iteration-clause forms (~6 files).** `var = init then next`,
-   keyword clauses `until:` / `while:` / `finally:`, and `var keyed-by k in c`
-   are unparsed (`parse_for_clause`). (Separately, `for` is also not yet *lowered*
-   — 51 files use it.)
+4. ✅ **Fixed (parser) — `for` iteration-clause forms.** `var = init then next`
+   (explicit step), `until:` / `while:` keyword clauses, and `var keyed-by k in c`
+   now parse (`ForClause::Step`/`Keyed` + `parse_for_clause`). *(Separately, `for`
+   is still not yet **lowered** — 51 files use it; that's a back-end task.)*
 5. ✅ **Fixed — `;` after a return signature (common style).**
    `define method f (…) => (x :: <integer>); body end` — the body parser tripped
    on the leading `;`. Now an optional `;` is consumed after `maybe_return_sig`
