@@ -12,14 +12,31 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus lower (`dump-dfm`) | _baseline TBD_ | |
-| OpenDylan corpus build/run | 0 | the headline goal to move |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 47 / 161 | was 34 before the testworks-compat macros |
+| OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
 
 ## Iterations
 
 *(newest first)*
+
+### 2026-06-14 — Iteration 7: minimal testworks (`define test`/`define suite` + `check-*`) — corpus compile 34 → 47
+
+- **Demand:** ~84 corpus files use the testworks harness (`define test`/`define
+  suite`, `check-equal`/`check-true`); `` `define test/suite` not lowered ``
+  blocked them.
+- **Added (via the new definition-macro engine):** `define test NAME () body
+  end` → `define function`; `define suite … end` → a no-op function (the
+  `test`/`suite` listing is dropped — running suites needs a real runner);
+  `check-equal`/`check-true`/`check-false` + `assert-true` functions (leading
+  `description` accepted and ignored). Minimal stand-ins — testworks is a
+  separate package, not vendored.
+- **Result:** a synthetic `define test`/`define suite` builds + runs (→1);
+  corpus **compile (`dump-dfm`, `--parse-with-rust`) 34 → 47 / 161**. In-tree
+  fixtures 55/55. This exercises the definition-macro engine on real,
+  high-frequency forms. Files that additionally need `common-dylan`/`io`/
+  `collections` bindings stay blocked on the (unported) library stack.
 
 ### 2026-06-14 — Iteration 6: definition-macro recursive span rewrite — `tak`'s macros fully expand
 

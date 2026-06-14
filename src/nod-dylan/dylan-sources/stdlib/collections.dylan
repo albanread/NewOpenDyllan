@@ -25,6 +25,30 @@ define function assert-equal (expected, actual) => (ok)
   expected = actual
 end function;
 
+// ─── check-* / assert-* — minimal testworks-compat assertions ────────────────
+//
+// Minimal stand-ins for testworks' check/assert helpers used inside `define
+// test` bodies. The leading `description` string is accepted and ignored; the
+// result is the boolean outcome. A full testworks records pass/fail into a
+// result tree — these thin versions unblock compiling test bodies that call
+// them. testworks is a separate package not vendored in the reference tree.
+
+define function check-equal (description, expected, actual) => (ok)
+  expected = actual
+end function;
+
+define function check-true (description, value) => (ok)
+  value
+end function;
+
+define function check-false (description, value) => (ok)
+  value = #f
+end function;
+
+define function assert-true (value) => (ok)
+  value
+end function;
+
 // ─── size ──────────────────────────────────────────────────────────────────
 //
 // A thin wrapper around the `%collection-size` primitive. The primitive

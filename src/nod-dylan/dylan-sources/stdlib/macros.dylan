@@ -209,6 +209,29 @@ define macro benchmark-repeat
     => { ?body }
 end macro;
 
+// ─── testworks define test / define suite (minimal) ──────────────────────────
+//
+// Definition macros for the testworks harness (a separate package, not vendored
+// in the reference tree). `define test NAME () body end` becomes a plain
+// `define function`; `define suite NAME () … end` becomes a no-op function (the
+// suite's `test`/`suite` listing is dropped — running suites needs a real
+// runner). Enough to compile test bodies past the harness wrapper. The
+// `check-*` helpers used inside test bodies live in collections.dylan.
+
+define macro test
+  { define test ?name:name () ?body:body end }
+    => { define function ?name () ?body end }
+  { define test ?name:name ?body:body end }
+    => { define function ?name () ?body end }
+end macro;
+
+define macro suite
+  { define suite ?name:name () ?body:body end }
+    => { define function ?name () #f end }
+  { define suite ?name:name ?body:body end }
+    => { define function ?name () #f end }
+end macro;
+
 // NOTE: an indexed `dotimes (i below N) … end` counted loop is deferred.
 // A body-shaped macro whose head is `(var <sep> expr)` with a separator
 // other than `for-each`'s special-cased `in` does not parse — the head
