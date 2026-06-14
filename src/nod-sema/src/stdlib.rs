@@ -146,6 +146,38 @@ pub fn stdlib_macro_source() -> &'static str {
     STDLIB_FILES[0].1
 }
 
+/// The set of macro names the stdlib defines, derived by parsing the stdlib
+/// macro source and collecting its `define macro` forms WITHOUT a full stdlib
+/// load (no JIT, no class registration). The standalone `dump-ast` path uses
+/// this to seed the parser's known-macro set so it recognises body-shaped
+/// stdlib macros (`when`, `with-cleanup`, `repeat`, …) the same way the real
+/// sema pipeline does — and picks up new stdlib macros automatically. Returns
+/// an empty vec on any parse/collect error (the caller keeps a static fallback).
+pub fn stdlib_macro_names() -> Vec<String> {
+    let src = stdlib_macro_source();
+    let mut sm = nod_reader::SourceMap::new();
+    let id = match sm.add("<stdlib-macros>".to_string(), src.to_string()) {
+        Ok(id) => id,
+        Err(_) => return Vec::new(),
+    };
+    let toks = nod_reader::lex(src, id);
+    let pre = nod_reader::scan_preamble(src);
+    let module = match nod_reader::parse_module_with_macros_rust(
+        src,
+        &toks,
+        pre.as_ref(),
+        &std::collections::HashSet::new(),
+    ) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
+    let mut table = MacroTable::default();
+    if nod_macro::collect_macros(&module, &sm, &mut table).is_err() {
+        return Vec::new();
+    }
+    table.defs.keys().cloned().collect()
+}
+
 /// Sprint 20b: macro entries the loader collected. User-side
 /// expansion merges these into the per-call `MacroTable`.
 pub(crate) fn stdlib_macros() -> &'static MacroTable {

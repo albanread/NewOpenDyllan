@@ -1315,24 +1315,23 @@ fn run_dump_ast(input: &std::path::Path) -> ExitCode {
     };
     let tokens = lex(&src, id);
     let pre = scan_preamble(&src);
-    // Sprint 51c-1 — seed the parser with the body-shaped macro
-    // names from the stdlib. nod-sema does this implicitly via
-    // `parse_user_module` (which calls
-    // `stdlib::ensure_loaded()` first); dump-ast runs outside sema
-    // and can't load the stdlib at this point because the shim's
-    // AOT resolver (when `--lex-with-dylan` / `--verify-parse` is
-    // set) has already claimed the runtime's class registry. We
-    // hardcode the name list instead — it's small, stable, and
-    // matches `stdlib_macros()` ground truth. New macros added to
-    // the stdlib show up in `parse_user_module` automatically; this
-    // list needs a manual entry so the standalone dump-ast path
-    // sees them too.
-    let macros: std::collections::HashSet<String> = [
+    // Seed the parser with the body-shaped macro names so the standalone
+    // dump-ast path recognises stdlib macro calls (`when`, `with-cleanup`,
+    // `repeat`, …) the same way the real sema pipeline does. The base set
+    // covers the builtin statement forms; we then augment it with the
+    // stdlib's ACTUAL macro names, derived from the macro source via
+    // `stdlib_macro_names()` (a light parse+collect — no JIT, no class
+    // registration, so it's safe even when the shim's AOT resolver has
+    // claimed the class registry). New stdlib macros are picked up
+    // automatically — no manual list to maintain. The static base remains a
+    // fallback if the derivation returns nothing.
+    let mut macros: std::collections::HashSet<String> = [
         "case", "cond", "for-each", "iterate", "select", "unless", "when", "while",
     ]
     .iter()
     .map(|s| s.to_string())
     .collect();
+    macros.extend(nod_sema::stdlib::stdlib_macro_names());
     // Sprint 51e.5 — call the canonical Rust parser DIRECTLY here, not
     // the dispatcher. `run_dump_ast` already ran its own inline Dylan
     // path above (and `return`ed on success); reaching here means it

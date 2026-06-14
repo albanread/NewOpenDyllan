@@ -132,13 +132,17 @@ front-end and the DFM lowering.
 **Acceptance.** A measurable reduction in the known-limitations list and/or an
 increase in lowered-construct coverage, each backed by tests.
 
-**Status — backlog scoped; two gaps filed.** A corpus triage (55 fixtures ×
+**Status — in progress (item 1 landed).** A corpus triage (55 fixtures ×
 `dump-ast`/`dump-dfm`/Dylan-side lowering) plus a known-limitations review
 produced a ranked backlog. Highest-leverage items, in order:
 
-1. Seed the stdlib macro table in the `dump-ast` diagnostic path so it matches
-   the real pipeline — fixes the only hard corpus parse failure
-   (`macro-when-cleanup.dylan`) and removes spurious macro fall-backs. *(small)*
+1. ✅ **Done.** Seed the stdlib macro table in the `dump-ast` diagnostic path so
+   it matches the real pipeline — `dump-ast` now derives the stdlib macro names
+   via `stdlib_macro_names()` and recognises `with-cleanup`/`repeat`/etc.,
+   fixing the only hard corpus parse failure (`macro-when-cleanup.dylan`).
+   Corpus parse coverage **54/55 → 55/55**; the byte-identical translation gate
+   (`dylan_parse_translate`) stays green; independently verified, no regression.
+   *(small)*
 2. Lower `case` / `select` in the back-end (currently a hard "not lowered" hole
    hit by both parsers). *(medium)*
 3. Extend the AST-wire translator (`dylan_to_ast.rs`) to cover
