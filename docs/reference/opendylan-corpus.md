@@ -20,7 +20,7 @@ For every `.dylan` file in the language/stdlib suites
 | Stage | Result | Notes |
 |------|--------|-------|
 | **Lex** | **161 / 161** | The lexer handles all real OpenDylan source. |
-| **Parse** (`dump-ast`, lenient) | **123 / 161 (76%)** | The standalone parser accepts most real Dylan syntax (was 101; +22 from the parser fixes below). |
+| **Parse** (`dump-ast`, lenient) | **139 / 161 (86%)** | The standalone parser accepts most real Dylan syntax (was 101; +38 from the parser fixes below). |
 | **Full compile** (`dump-dfm`/`build`) | **0 real tests** | Blocked before codegen for every real test/benchmark. |
 
 So: we can **read** the corpus, we can **parse** most of it, but we cannot yet

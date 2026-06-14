@@ -1072,10 +1072,14 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        // Skip body tokens up to the matching `end` at depth 0.
-        // The body is opaque to the parser — macro pattern matching
-        // sees it as raw fragments via `call_site_fragments`.
-        let mut depth = 0i32;
+        // Skip body tokens up to the matching `end` that closes THIS macro.
+        // The body is opaque to the parser — macro pattern matching sees it as
+        // raw fragments via `call_site_fragments`. Track BOTH grouping depth
+        // (`()[]{}`) and nested end-terminated block depth, so a nested
+        // `if`/`for`/`begin`/body-macro (each closing with its own `end`, often
+        // a bare `end;`) is not mistaken for this macro's terminator.
+        let mut depth = 0i32; // () [] {} grouping
+        let mut bdepth = 0i32; // nested end-terminated blocks
         let end_tok = loop {
             if self.at_end() {
                 return Err(self.diag(
@@ -1105,8 +1109,30 @@ impl<'a> Parser<'a> {
                     depth -= 1;
                     self.bump();
                 }
-                TokenKind::KwEnd if depth == 0 => {
-                    break self.bump();
+                TokenKind::KwEnd => {
+                    if depth > 0 {
+                        // literal `end` inside a grouping (e.g. a macro rule)
+                        self.bump();
+                    } else if bdepth > 0 {
+                        // closes a nested block
+                        bdepth -= 1;
+                        self.bump();
+                        // skip an optional `end <keyword>` echo
+                        if matches!(self.peek_kind(), TokenKind::Ident)
+                            && Self::is_block_opener_kw(self.token_text(self.peek()))
+                        {
+                            self.bump();
+                        }
+                    } else {
+                        // closes THIS macro
+                        break self.bump();
+                    }
+                }
+                TokenKind::Ident if depth == 0 => {
+                    if Self::is_block_opener_kw(self.token_text(self.peek())) {
+                        bdepth += 1;
+                    }
+                    self.bump();
                 }
                 _ => {
                     self.bump();
@@ -2872,6 +2898,7 @@ impl<'a> Parser<'a> {
     fn is_block_opener_kw(w: &str) -> bool {
         matches!(
             w,
+            // kernel control-flow
             "if" | "for"
                 | "while"
                 | "until"
@@ -2884,10 +2911,24 @@ impl<'a> Parser<'a> {
                 | "cond"
                 | "iterate"
                 | "method"
+                // stdlib body-shaped macros
                 | "for-each"
                 | "with-cleanup"
                 | "dynamic-bind"
                 | "repeat"
+                // common library / test-harness body-shaped macros (end-terminated)
+                | "with-lock"
+                | "with-open-file"
+                | "with-application-output"
+                | "with-pretty-print-to-string"
+                | "with-output-to-string"
+                | "printing-logical-block"
+                | "pprint-logical-block"
+                | "printing-object"
+                | "collecting"
+                | "benchmark-repeat"
+                | "timing"
+                | "profiling"
         )
     }
 
