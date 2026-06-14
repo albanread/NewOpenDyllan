@@ -200,6 +200,15 @@ macro-expands, lowers, and runs cleanly through the Dylan front-end.
 **Acceptance.** A documented corpus-coverage number at sprint start and end, with
 a net increase and the remaining gaps triaged into follow-up work.
 
+**Status — in-tree corpus + upstream corpus assessed.** In-tree fixtures:
+**55/55** `dump-dfm`, **54/55 → 55/55** `dump-ast` (after the goal-4 macro-seeding
+fix). The upstream OpenDylan corpus (`opendylan-tests/`, language + stdlib suites,
+161 files) was assessed end-to-end: **lex 161/161**, **parse 101/161 (63%)**, but
+**0 real tests compile** yet — blocked by (1) the testworks harness (not in tree)
+and (2) the unported OpenDylan library stack, plus a tight cluster of concrete
+parser gaps and a panic-instead-of-diagnostic robustness issue. Full findings and
+a ranked unlock plan: [OpenDylan corpus](../reference/opendylan-corpus.md).
+
 ---
 
 ## Definition of done

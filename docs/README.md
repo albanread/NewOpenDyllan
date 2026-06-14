@@ -88,6 +88,7 @@ and that single cut line shapes the whole project.
 | [Known limitations](reference/known-limitations.md) | Language-feature and compiler gaps, with workarounds and planned fixes |
 | [Upstream Open Dylan](reference/upstream-opendylan.md) | Adoption notes, license obligations, the lifting workflow |
 | [Tracing & diagnostics](reference/tracing.md) | GC tracing and AOT crash symbolication |
+| [OpenDylan corpus](reference/opendylan-corpus.md) | Coverage & applicability of the upstream test corpus |
 
 ## Development
 
