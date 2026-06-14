@@ -196,6 +196,19 @@ define macro benchmark
     => { define function ?name () ?body end }
 end macro;
 
+// ─── benchmark-repeat — minimal testworks-compat timing wrapper ───────────────
+//
+// `benchmark-repeat (iterations: N) body end` runs the body and yields its
+// value. A full testworks repeats the body N times for timing; this minimal
+// version runs it once — the RESULT is identical, only the timing is dropped —
+// which is enough to compile + run benchmark bodies. Not a faithful port:
+// testworks is a separate package not vendored in the reference tree.
+
+define macro benchmark-repeat
+  { benchmark-repeat ?opts:expression ?body:body end }
+    => { ?body }
+end macro;
+
 // NOTE: an indexed `dotimes (i below N) … end` counted loop is deferred.
 // A body-shaped macro whose head is `(var <sep> expr)` with a separator
 // other than `for-each`'s special-cased `in` does not parse — the head

@@ -13,6 +13,18 @@ define function nod-stdlib-marker (x) => (n)
   x + 1
 end function;
 
+// ─── assert-equal — minimal testworks-compat check ───────────────────────────
+//
+// Minimal stand-in for testworks' `assert-equal`: yields #t when the two values
+// are equal. A full testworks signals a test failure on mismatch; this thin
+// version unblocks compiling and running test/benchmark bodies that call it.
+// Not a faithful port — testworks is a separate package not vendored in the
+// reference tree.
+
+define function assert-equal (expected, actual) => (ok)
+  expected = actual
+end function;
+
 // ─── size ──────────────────────────────────────────────────────────────────
 //
 // A thin wrapper around the `%collection-size` primitive. The primitive

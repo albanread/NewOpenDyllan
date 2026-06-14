@@ -687,6 +687,22 @@ pub fn match_pattern(pattern: &[PatternElem], call: &[Fragment]) -> Option<Bindi
                                             || tok_text_eq(t, "method")
                                             || tok_text_eq(t, "when")
                                             || tok_text_eq(t, "with-cleanup")
+                                            || tok_text_eq(t, "iterate")
+                                            || tok_text_eq(t, "for-each")
+                                            || tok_text_eq(t, "dynamic-bind")
+                                            || tok_text_eq(t, "repeat")
+                                            || tok_text_eq(t, "with-lock")
+                                            || tok_text_eq(t, "with-open-file")
+                                            || tok_text_eq(t, "with-application-output")
+                                            || tok_text_eq(t, "with-pretty-print-to-string")
+                                            || tok_text_eq(t, "with-output-to-string")
+                                            || tok_text_eq(t, "printing-logical-block")
+                                            || tok_text_eq(t, "pprint-logical-block")
+                                            || tok_text_eq(t, "printing-object")
+                                            || tok_text_eq(t, "collecting")
+                                            || tok_text_eq(t, "benchmark-repeat")
+                                            || tok_text_eq(t, "timing")
+                                            || tok_text_eq(t, "profiling")
                                         {
                                             depth += 1;
                                         }

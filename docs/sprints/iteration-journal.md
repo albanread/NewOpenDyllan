@@ -21,6 +21,30 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 
 *(newest first)*
 
+### 2026-06-14 — Iteration 5: testworks-compat stdlib helpers + matcher nested-`end` fix
+
+- **Demand:** real gabriel benchmarks (`tak.dylan`) call `benchmark-repeat
+  (iterations: N) … end` and `assert-equal` — from `testworks`, which is a
+  separate package not vendored in the reference tree.
+- **Added (minimal, faithful):** `assert-equal(expected, actual)` (equality
+  check) to `stdlib/collections.dylan`; `benchmark-repeat ?opts:expression
+  ?body:body end` (runs the body, yields its value — drops only the repeat-count
+  timing) to `stdlib/macros.dylan`.
+- **Found + fixed a *third* nested-`end`-balancing bug:** the macro **matcher's**
+  `?body` termination (`nod-macro`) had its own hardcoded block-opener list,
+  missing the library body-macros (`benchmark-repeat`, `with-lock`, …). Extended
+  it to match the parser's set, so a matched macro's body can contain nested
+  library-macro `end`s.
+- **Verified:** `assert-equal(7,7)`→`#t`, `(7,8)`→`#f`; `benchmark-repeat` in a
+  normal function body builds + runs (=7); the `benchmark` definition macro now
+  matches real `tak`'s body. In-tree fixtures unchanged (55/55).
+- **Remaining blocker for `tak.dylan`:** definition-macro-produced items use a
+  span shortcut (lexed with the call-site file id), so RECURSIVE expansion of a
+  body-macro *inside* the produced item (`benchmark-repeat` inside the
+  `benchmark`-produced function) re-lexes the wrong tokens. Needs an origins-based
+  span rewrite of the produced item (scratch SourceMap + `rewrite_spans_item`) —
+  next.
+
 ### 2026-06-14 — Iteration 4: definition macros (engine feature) — `define benchmark`
 
 - **Demand:** the gabriel benchmark files wrap pure functions in
