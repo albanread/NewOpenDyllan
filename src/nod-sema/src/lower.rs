@@ -514,6 +514,12 @@ fn lookup_primitive(name: &str) -> Option<(&'static str, usize, TypeEstimate)> {
 fn operator_arity(name: &str) -> Option<usize> {
     match name {
         "+" | "-" | "*" | "=" | "<" | ">" => Some(2),
+        // First-class value forms of the equality / identity / instance?
+        // operators. Inline forms (`3 == 3`, `instance?(x, <c>)`) lower
+        // specially; these arities let a bareword / `\op` lower to
+        // `nod_make_function_ref`, resolving to the matching Rust shim
+        // registered in `ensure_operator_shims_registered`.
+        "==" | "~=" | "~==" | "instance?" => Some(2),
         _ => None,
     }
 }
