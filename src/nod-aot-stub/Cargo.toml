@@ -1,0 +1,16 @@
+[package]
+name = "nod-aot-stub"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# A deliberately tiny crate holding ONLY the default `nod_user_main` stub.
+# Its own crate => its own object file => MSVC on-demand archive extraction can
+# reliably DROP it when the user supplies their own `nod_user_main` (the AOT EXE
+# entry). Keeping the stub inside nod-runtime let Cargo's CGU partitioner merge
+# it with an always-pulled module, intermittently tripping
+# `LNK2005 nod_user_main already defined`. See docs/sprints/deep-levers-plan.md.
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]

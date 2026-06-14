@@ -50,11 +50,14 @@ compile_error!(
 // the codegen-emitted `i32 @main()` stub calls. Pure code; depends on
 // every other module being already initialisable.
 mod aot;
-// Sprint 39a — separate `.obj` carrying the `nod_user_main` default
-// stub. Lives outside `aot` so MSVC's archive-extraction rule can drop
-// it when a real AOT EXE supplies its own `nod_user_main`. See the
-// file-level doc for the long-form rationale.
-mod aot_user_main_stub;
+// The `nod_user_main` default stub now lives in its OWN crate (`nod-aot-stub`)
+// so it gets its own object file regardless of nod-runtime's CGU partitioning —
+// making MSVC's on-demand archive-extraction drop reliable (a nod-runtime
+// module could be CGU-merged with an always-pulled object → intermittent
+// `LNK2005 nod_user_main`). `as _` links the crate for its side-effect symbol
+// only (no Rust items used), so the object is still pulled on-demand, never
+// forced. See `nod-aot-stub/src/lib.rs`.
+extern crate nod_aot_stub as _;
 mod c_types;
 mod callbacks;
 mod classes;

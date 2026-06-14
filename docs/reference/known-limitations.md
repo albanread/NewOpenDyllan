@@ -168,30 +168,20 @@ or a standing design trade-off are kept here.
 * **Scope**: medium (`src/nod-reader/src/parser.rs` parse path + the stdlib macros).
 * **Status**: open.
 
-## Cold-build AOT EXE link fails with `LNK2005 nod_user_main`
+## Cold-build AOT EXE link `LNK2005 nod_user_main` — RESOLVED (2026-06-14)
 
-* **Symptom**: on a freshly built tree (a new worktree, after `cargo clean`, or
-  likely CI / a fresh clone), linking an AOT executable fails with `LNK2005:
-  nod_user_main already defined`. `nod_runtime` ships a weak-default `nod_user_main`
-  stub (`aot_user_main_stub.rs`); the real EXE supplies its own strong
-  `nod_user_main`. MSVC's on-demand archive extraction is supposed to drop the stub,
-  but Cargo's CGU partitioner can colocate the stub member with a hot std
-  monomorphization that is always pulled in, forcing the stub's extraction → the
-  collision. A WARM incremental build often partitions differently and links
-  cleanly, which is why it is intermittent and easy to miss. Confirmed independently
-  by two cold-build agents (2026-06-14).
-* **Workaround (interim, environment-dependent)**: a warm incremental `main`
-  generally links. `tools/smoke-aot.sh` therefore passes on a warm tree but may fail
-  cold.
-* **Planned fix**: make the stub its own archive member reliably (e.g. isolate it in
-  a dedicated CGU / crate, or `#[link_section]`-segregate it) so on-demand extraction
-  drops it — WITHOUT `/FORCE:MULTIPLE` (which silences ALL duplicate-symbol errors
-  and masks real ODR bugs) and WITHOUT `codegen-units = 1` (which fuses the crate
-  into one always-pulled member, making it worse). Needs investigation of the CGU
-  partitioning.
-* **Scope**: medium (build/link infra — `src/nod-runtime` packaging,
-  `src/nod-driver/src/main.rs` link step, `Cargo.toml`).
-* **Status**: open (pre-existing; surfaced 2026-06-14).
+* **Was**: AOT EXE linking intermittently failed with `LNK2005: nod_user_main
+  already defined` — Cargo's CGU partitioner could merge nod-runtime's
+  `aot_user_main_stub.rs` into an always-pulled object, defeating MSVC's
+  on-demand archive extraction. A warm incremental build often linked by luck;
+  any non-trivial `nod-runtime` edit could re-partition and break it.
+* **Fix**: moved the default `nod_user_main` stub into its own crate
+  (`src/nod-aot-stub`). A separate crate is always compiled to its own object,
+  regardless of nod-runtime's CGU layout, so on-demand extraction reliably drops
+  it when the user supplies their own `nod_user_main` (every real AOT EXE).
+  `nod-runtime` links it via `extern crate nod_aot_stub as _;` (side-effect symbol
+  only, never force-pulled). `codegen-units = 1` was the WRONG fix (one object for
+  the whole crate → stub always pulled). Guard: `tools/smoke-aot.sh`.
 
 ## A one-line function body containing a `for` loop fails to build
 

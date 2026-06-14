@@ -39,6 +39,13 @@ semispace-backend = []
 
 [dependencies]
 newgc-core = { workspace = true, optional = true }
+# The default `nod_user_main` stub lives in its OWN crate so it gets its own
+# object file — MSVC on-demand archive extraction then reliably drops it when
+# the user supplies their own `nod_user_main`. (Previously the stub was a
+# nod-runtime module that the CGU partitioner could merge with an always-pulled
+# object, intermittently tripping `LNK2005 nod_user_main`.) Linked for its
+# side-effect symbol only; see `nod-aot-stub` and `extern crate ... as _` in lib.rs.
+nod-aot-stub = { path = "../nod-aot-stub" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
