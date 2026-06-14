@@ -158,6 +158,14 @@ Two new robustness gaps were filed this sprint in
 macro-head separator limitation, and an unhandled signalled condition panicking
 the `eval` engine.
 
+**Parser-coverage push (landed).** Three corpus-driven parser fixes — block-depth
+tracking when skipping unknown `define`-macro bodies, an optional `;` after a
+return signature, and escaped names (`\name`) in import specs — lifted the
+OpenDylan corpus parse rate **101 → 121 / 161**, with the in-tree fixtures
+unchanged (55/55). Remaining gaps (for-iteration clause forms, nested body-macro
+`end`s, keyword-symbol atoms, no-`end` define-forms) are tracked in
+[the corpus assessment](../reference/opendylan-corpus.md).
+
 ## 5. Add more macros
 
 **Objective.** Grow the surface syntax defined as Dylan

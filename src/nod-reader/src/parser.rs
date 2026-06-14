@@ -1292,6 +1292,9 @@ impl<'a> Parser<'a> {
         // Optional `=> (return-sig)` — for anonymous methods. We parse and
         // discard the type info at expression level.
         let _ret = self.maybe_return_sig()?;
+        if matches!(self.peek_kind(), TokenKind::Semicolon) {
+            self.bump();
+        }
         let body = self.parse_body_until_end()?;
         let end_tok = self.expect(TokenKind::KwEnd, "`end`")?;
         self.consume_optional_kw("method");
@@ -1586,6 +1589,9 @@ impl<'a> Parser<'a> {
             let name = self.token_text(name_tok).to_string();
             let params = self.parse_param_list_loose()?;
             let return_ = self.maybe_return_sig()?;
+            if matches!(self.peek_kind(), TokenKind::Semicolon) {
+                self.bump();
+            }
             let body = self.parse_stmt_body()?;
             let end_tok = self.expect(TokenKind::KwEnd, "`end` for local method")?;
             self.consume_optional_kw("method");
@@ -2035,6 +2041,11 @@ impl<'a> Parser<'a> {
         let name = self.token_text(name_tok).to_string();
         let params = self.parse_param_list_loose()?;
         let return_ = self.maybe_return_sig()?;
+        // A `;` may terminate the signature before the body
+        // (`define method f (…) => (…) ; body end`), as in c-function.
+        if matches!(self.peek_kind(), TokenKind::Semicolon) {
+            self.bump();
+        }
         let body = self.parse_stmt_body()?;
         let end_tok = self.expect(TokenKind::KwEnd, "`end` of define-function")?;
         // Optional `kind` echo then optional name echo.
@@ -2647,6 +2658,22 @@ impl<'a> Parser<'a> {
         Ok((import, exclude, rename, prefix, export))
     }
 
+    /// Accept a binding name in an import/export/rename spec: a plain `Ident`
+    /// or an `EscapedIdent` (`\name`, used to name operator-shaped bindings such
+    /// as `\without-bounds-checks`). Returns the token and the name with any
+    /// leading backslash stripped.
+    fn expect_binding_name(&mut self, what: &str) -> Result<(Token, String), Diagnostic> {
+        let t = self.peek();
+        if matches!(t.kind, TokenKind::Ident | TokenKind::EscapedIdent) {
+            self.bump();
+            let raw = self.token_text(t);
+            let name = raw.strip_prefix('\\').unwrap_or(raw).to_string();
+            Ok((t, name))
+        } else {
+            Err(self.diag(t.span, format!("expected {what} (Ident)")))
+        }
+    }
+
     fn parse_import_set(&mut self) -> Result<ImportSet, Diagnostic> {
         // `all` keyword (as #all) or a `{ … }` set.
         if matches!(self.peek_kind(), TokenKind::HashAllKeys) {
@@ -2663,13 +2690,12 @@ impl<'a> Parser<'a> {
             let mut specs = Vec::new();
             if !matches!(self.peek_kind(), TokenKind::RBrace) {
                 loop {
-                    let name_tok = self.expect(TokenKind::Ident, "imported name")?;
-                    let name = self.token_text(name_tok).to_string();
+                    let (name_tok, name) = self.expect_binding_name("imported name")?;
                     let mut rename: Option<String> = None;
                     if matches!(self.peek_kind(), TokenKind::Arrow) {
                         self.bump();
-                        let r_tok = self.expect(TokenKind::Ident, "rename target")?;
-                        rename = Some(self.token_text(r_tok).to_string());
+                        let (_r_tok, r_name) = self.expect_binding_name("rename target")?;
+                        rename = Some(r_name);
                     }
                     specs.push(ImportSpec {
                         span: name_tok.span,

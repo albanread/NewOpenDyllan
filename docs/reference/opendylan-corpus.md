@@ -20,7 +20,7 @@ For every `.dylan` file in the language/stdlib suites
 | Stage | Result | Notes |
 |------|--------|-------|
 | **Lex** | **161 / 161** | The lexer handles all real OpenDylan source. |
-| **Parse** (`dump-ast`, lenient) | **118 / 161 (73%)** | The standalone parser accepts most real Dylan syntax (was 101 before the body-skip fix below). |
+| **Parse** (`dump-ast`, lenient) | **121 / 161 (75%)** | The standalone parser accepts most real Dylan syntax (was 101; +20 from the parser fixes below). |
 | **Full compile** (`dump-dfm`/`build`) | **0 real tests** | Blocked before codegen for every real test/benchmark. |
 
 So: we can **read** the corpus, we can **parse** most of it, but we cannot yet
@@ -91,14 +91,16 @@ turn a hard *parse wall* into a clean fall-through. Ranked by files unlocked:
    keyword clauses `until:` / `while:` / `finally:`, and `var keyed-by k in c`
    are unparsed (`parse_for_clause`). (Separately, `for` is also not yet *lowered*
    — 51 files use it.)
-5. **`;` after a return signature (3+ files, common style).**
-   `define method f (…) => (x :: <integer>);` — the body parser trips on the
-   leading `;`. Fix: consume an optional `;` after `maybe_return_sig`.
+5. ✅ **Fixed — `;` after a return signature (common style).**
+   `define method f (…) => (x :: <integer>); body end` — the body parser tripped
+   on the leading `;`. Now an optional `;` is consumed after `maybe_return_sig`
+   at the define-function/method, local-method, and anonymous-method sites.
 6. **Keyword-symbol in value position (2 files).** `#(year:, 1800)` and
    `as(<string>, Foo:)` — a bare `name:` constant. Fix: accept `KeywordColon`
    as a symbol atom; disambiguate from keyword args by look-ahead.
-7. **Escaped names in import specs (2 files).** `import: { \without-bounds-checks }`
-   — `parse_import_set` rejects `EscapedIdent`. Fix: accept and strip the `\`.
+7. ✅ **Fixed — escaped names in import specs.** `import: { \without-bounds-checks }`
+   — `parse_import_set` now accepts `Ident | EscapedIdent` (via
+   `expect_binding_name`) and strips the leading `\`.
 8. **Adjacent string-literal concatenation (1+).** `"a\n" "b\n"` — Dylan folds
    adjacent strings. Fix: fold in the string atom.
 9. **`.=hash` operator-named slot access (1).** `x.=hash` lexes as `=` + `hash`.
