@@ -1,0 +1,12 @@
+[package]
+name        = "nod-dfm"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+description = "NewOpenDylan: DFM (Dylan Flow Machine) SSA IR."
+
+[dependencies]
+nod-reader = { path = "../nod-reader" }
+
+[lints]
+workspace = true

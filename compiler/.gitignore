@@ -1,0 +1,6 @@
+# Build artifacts from `nod-driver build` of the shim / driver bundles.
+# The shim's dylan-lex-shim.lib.obj is rebuilt via the no-shim bootstrap
+# (see src/nod-driver/build.rs); never commit it.
+*.exe
+*.map
+*.obj

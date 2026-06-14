@@ -1,0 +1,11 @@
+# Sprint 49 — example project file.
+#
+# Demonstrates the MVP three-field schema: name, sources, output.
+# `nod-driver build --project factorial.prj` produces `factorial.exe`
+# alongside this file. All relative paths in `sources` and `output`
+# anchor at *this file's directory*, not the caller's CWD — so the
+# command works the same from anywhere in the tree.
+
+name    = "factorial"
+sources = ["factorial.dylan"]
+output  = "factorial.exe"

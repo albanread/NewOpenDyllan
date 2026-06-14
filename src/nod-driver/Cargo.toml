@@ -1,0 +1,47 @@
+[package]
+name        = "nod-driver"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+description = "NewOpenDylan compiler driver (CLI entrypoint)."
+
+[lints]
+workspace = true
+
+[features]
+# Sprint 23: forward GC backend selection from `nod-runtime` via
+# `nod-sema`. Same shape as the other crates that depend on
+# `nod-runtime`.
+default = ["newgc-backend"]
+newgc-backend = ["nod-sema/newgc-backend"]
+semispace-backend = ["nod-sema/semispace-backend"]
+
+[dependencies]
+clap          = { workspace = true }
+# Sprint 49 — `build --project foo.prj` reads TOML. `serde` derives
+# the `Project` struct from the schema; `toml` parses. Both are tiny
+# pure-Rust crates with no transitive surprises.
+serde         = { workspace = true }
+toml          = { workspace = true }
+nod-reader    = { path = "../nod-reader" }
+nod-namespace = { path = "../nod-namespace" }
+nod-sema      = { path = "../nod-sema", default-features = false }
+# Sprint 39a — the `build` subcommand needs to emit object files and
+# locate the dual-output staticlib produced by `nod-runtime`. We depend
+# on `nod-llvm` for its `aot::emit_aot_object` helper and the LLVM
+# `Context`. `nod-runtime` itself is a transitive dep through `nod-llvm`
+# but adding it explicitly here keeps the resolver path obvious.
+nod-llvm      = { path = "../nod-llvm", default-features = false }
+nod-runtime   = { path = "../nod-runtime", default-features = false }
+# Sprint 39b — the `build` subcommand walks the lowered manifest's
+# `RelocKind::StubEntry` entries and asks `nod-winapi` for the matching
+# import library name (`kernel32.dll` -> `kernel32.lib`). Workspace-local
+# dep, doesn't grow the external footprint.
+nod-winapi    = { path = "../nod-winapi" }
+# Sprint 39a — `cc-rs`'s `Tool` finder locates MSVC's `link.exe` across
+# every Visual Studio install layout (VS 2017 vswhere, VS 2019/22 standard
+# paths, Build Tools, env-var override). Per the Sprint 39a brief, this
+# dependency is **only** added to `nod-driver`; `nod-llvm` and
+# `nod-runtime` stay dependency-clean. Pinned at 1.x — cc-rs is on a long
+# stable train and the workspace's other no-dep crates never see it.
+cc            = "1"

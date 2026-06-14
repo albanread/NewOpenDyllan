@@ -1,0 +1,12 @@
+# Sprint 53.2 — Dylan-side sema recording walk (top-level name table).
+#
+# Bundles the Dylan lexer + parser + sema walk into an EXE whose entry
+# (`sema-main`) reads argv[1], parses it, and prints the `=== top-names ===`
+# section of the sema model. The gate `tests/nod-tests/tests/sema_topnames.rs`
+# byte-matches this against `--parse-with-rust dump-sema`'s top-names
+# section for class-free fixtures.
+
+name           = "dylan-sema"
+sources        = ["../../../compiler/dylan-lexer.dylan", "../../../compiler/dylan-parser.dylan", "../../../compiler/dylan-c3.dylan", "../../../compiler/dylan-sema.dylan"]
+output         = "dylan-sema.exe"
+start_function = "sema-main"

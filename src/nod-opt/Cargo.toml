@@ -1,0 +1,9 @@
+[package]
+name        = "nod-opt"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+description = "NewOpenDylan: nod-opt (Sprint 01 stub)."
+
+[lints]
+workspace = true

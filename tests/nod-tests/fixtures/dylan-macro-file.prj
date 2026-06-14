@@ -1,0 +1,12 @@
+# Sprint 52.6 — whole-file macro expansion driver (locus B, test level).
+#
+# Bundles the Dylan-side lexer + macro engine + the file-expand driver.
+# `file-expand-main` reads argv[1], expands the whole file's macro calls
+# (define-macros stripped), and prints the expanded source. The gate
+# `tests/nod-tests/tests/macro_file_expand.rs` re-parses it and compares
+# the AST to Rust's parse+expand (modulo define-macro items).
+
+name           = "dylan-macro-file"
+sources        = ["../../../compiler/dylan-lexer.dylan", "../../../compiler/dylan-macro.dylan", "dylan-macro-file.dylan"]
+output         = "dylan-macro-file.exe"
+start_function = "file-expand-main"

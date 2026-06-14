@@ -1,0 +1,378 @@
+# Sprint 29 — Hand-curated Win32 integer constants.
+#
+# Schema v5 of windows_api.db carries enum *type* declarations
+# (MESSAGEBOX_STYLE, WIN32_ERROR, …) but NOT their member values, so
+# Sprint 29 ships a hand-maintained list of the constants Dylan code
+# most commonly needs to spell.
+#
+# Format:
+#   #   line comments
+#   # category: <name>     starts a new grouping (purely cosmetic — flows
+#                          through to the generated Dylan file as a
+#                          section comment)
+#   NAME = <integer>       decimal, or 0x… for hex, or a signed integer.
+#                          Each value is parsed as i64.
+#   NAME = <integer>  ; <source-dll>
+#                          optional source-DLL annotation after a `;`.
+#
+# Trailing whitespace and blank lines ignored. NAME is upper-snake-case
+# Win32 spelling; the generator transforms it into `$UPPER-SNAKE-CASE`
+# at emit time (Dylan convention: $-prefixed constant, `-` separated).
+
+# category: Pointer / handle sentinels
+# `$NULL` marshals as the zero pointer through the FFI layer — passing
+# it as a `<c-pointer>`, `<c-handle>`, `<c-string>`, or
+# `<c-wide-string>` arg produces a null pointer at the C call site.
+NULL = 0
+
+# category: MessageBox flags (user32) — buttons
+MB_OK = 0x0000  ; user32.dll
+MB_OKCANCEL = 0x0001  ; user32.dll
+MB_ABORTRETRYIGNORE = 0x0002  ; user32.dll
+MB_YESNOCANCEL = 0x0003  ; user32.dll
+MB_YESNO = 0x0004  ; user32.dll
+MB_RETRYCANCEL = 0x0005  ; user32.dll
+MB_CANCELTRYCONTINUE = 0x0006  ; user32.dll
+
+# category: MessageBox flags (user32) — icons
+MB_ICONHAND = 0x0010  ; user32.dll
+MB_ICONERROR = 0x0010  ; user32.dll
+MB_ICONSTOP = 0x0010  ; user32.dll
+MB_ICONQUESTION = 0x0020  ; user32.dll
+MB_ICONEXCLAMATION = 0x0030  ; user32.dll
+MB_ICONWARNING = 0x0030  ; user32.dll
+MB_ICONASTERISK = 0x0040  ; user32.dll
+MB_ICONINFORMATION = 0x0040  ; user32.dll
+
+# category: MessageBox flags (user32) — default button
+MB_DEFBUTTON1 = 0x0000  ; user32.dll
+MB_DEFBUTTON2 = 0x0100  ; user32.dll
+MB_DEFBUTTON3 = 0x0200  ; user32.dll
+MB_DEFBUTTON4 = 0x0300  ; user32.dll
+
+# category: MessageBox return values (IDOK/IDCANCEL/…) (user32)
+IDOK = 1  ; user32.dll
+IDCANCEL = 2  ; user32.dll
+IDABORT = 3  ; user32.dll
+IDRETRY = 4  ; user32.dll
+IDIGNORE = 5  ; user32.dll
+IDYES = 6  ; user32.dll
+IDNO = 7  ; user32.dll
+IDCLOSE = 8  ; user32.dll
+IDHELP = 9  ; user32.dll
+IDTRYAGAIN = 10  ; user32.dll
+IDCONTINUE = 11  ; user32.dll
+
+# category: Window messages (user32) — lifecycle
+WM_NULL = 0x0000  ; user32.dll
+WM_CREATE = 0x0001  ; user32.dll
+WM_DESTROY = 0x0002  ; user32.dll
+WM_MOVE = 0x0003  ; user32.dll
+WM_SIZE = 0x0005  ; user32.dll
+WM_ACTIVATE = 0x0006  ; user32.dll
+WM_SETFOCUS = 0x0007  ; user32.dll
+WM_KILLFOCUS = 0x0008  ; user32.dll
+WM_ENABLE = 0x000A  ; user32.dll
+WM_SETREDRAW = 0x000B  ; user32.dll
+WM_SETTEXT = 0x000C  ; user32.dll
+WM_GETTEXT = 0x000D  ; user32.dll
+WM_GETTEXTLENGTH = 0x000E  ; user32.dll
+WM_PAINT = 0x000F  ; user32.dll
+WM_CLOSE = 0x0010  ; user32.dll
+WM_QUERYENDSESSION = 0x0011  ; user32.dll
+WM_QUIT = 0x0012  ; user32.dll
+WM_QUERYOPEN = 0x0013  ; user32.dll
+WM_ERASEBKGND = 0x0014  ; user32.dll
+WM_SYSCOLORCHANGE = 0x0015  ; user32.dll
+WM_ENDSESSION = 0x0016  ; user32.dll
+WM_SHOWWINDOW = 0x0018  ; user32.dll
+
+# category: Window messages (user32) — keyboard / mouse
+WM_KEYDOWN = 0x0100  ; user32.dll
+WM_KEYUP = 0x0101  ; user32.dll
+WM_CHAR = 0x0102  ; user32.dll
+WM_DEADCHAR = 0x0103  ; user32.dll
+WM_SYSKEYDOWN = 0x0104  ; user32.dll
+WM_SYSKEYUP = 0x0105  ; user32.dll
+WM_SYSCHAR = 0x0106  ; user32.dll
+WM_SYSDEADCHAR = 0x0107  ; user32.dll
+WM_MOUSEMOVE = 0x0200  ; user32.dll
+WM_LBUTTONDOWN = 0x0201  ; user32.dll
+WM_LBUTTONUP = 0x0202  ; user32.dll
+WM_LBUTTONDBLCLK = 0x0203  ; user32.dll
+WM_RBUTTONDOWN = 0x0204  ; user32.dll
+WM_RBUTTONUP = 0x0205  ; user32.dll
+WM_RBUTTONDBLCLK = 0x0206  ; user32.dll
+WM_MBUTTONDOWN = 0x0207  ; user32.dll
+WM_MBUTTONUP = 0x0208  ; user32.dll
+WM_MBUTTONDBLCLK = 0x0209  ; user32.dll
+WM_MOUSEWHEEL = 0x020A  ; user32.dll
+WM_MOUSEHWHEEL = 0x020E  ; user32.dll
+
+# category: Window messages (user32) — commands & input
+WM_COMMAND = 0x0111  ; user32.dll
+WM_SYSCOMMAND = 0x0112  ; user32.dll
+WM_TIMER = 0x0113  ; user32.dll
+WM_HSCROLL = 0x0114  ; user32.dll
+WM_VSCROLL = 0x0115  ; user32.dll
+WM_INITDIALOG = 0x0110  ; user32.dll
+WM_NOTIFY = 0x004E  ; user32.dll
+WM_INPUT = 0x00FF  ; user32.dll
+
+# category: Window styles (user32) — top-level
+WS_OVERLAPPED = 0x00000000  ; user32.dll
+WS_POPUP = 0x80000000  ; user32.dll
+WS_CHILD = 0x40000000  ; user32.dll
+WS_MINIMIZE = 0x20000000  ; user32.dll
+WS_VISIBLE = 0x10000000  ; user32.dll
+WS_DISABLED = 0x08000000  ; user32.dll
+WS_CLIPSIBLINGS = 0x04000000  ; user32.dll
+WS_CLIPCHILDREN = 0x02000000  ; user32.dll
+WS_MAXIMIZE = 0x01000000  ; user32.dll
+WS_CAPTION = 0x00C00000  ; user32.dll
+WS_BORDER = 0x00800000  ; user32.dll
+WS_DLGFRAME = 0x00400000  ; user32.dll
+WS_VSCROLL = 0x00200000  ; user32.dll
+WS_HSCROLL = 0x00100000  ; user32.dll
+WS_SYSMENU = 0x00080000  ; user32.dll
+WS_THICKFRAME = 0x00040000  ; user32.dll
+WS_GROUP = 0x00020000  ; user32.dll
+WS_TABSTOP = 0x00010000  ; user32.dll
+WS_MINIMIZEBOX = 0x00020000  ; user32.dll
+WS_MAXIMIZEBOX = 0x00010000  ; user32.dll
+# WS_OVERLAPPEDWINDOW = OVERLAPPED|CAPTION|SYSMENU|THICKFRAME|MINIMIZEBOX|MAXIMIZEBOX
+#                    = 0|C00000|80000|40000|20000|10000 = 0x00CF0000 = 13565952
+WS_OVERLAPPEDWINDOW = 0x00CF0000  ; user32.dll
+WS_POPUPWINDOW = 0x80880000  ; user32.dll
+
+# category: Window extended styles (user32)
+WS_EX_DLGMODALFRAME = 0x00000001  ; user32.dll
+WS_EX_NOPARENTNOTIFY = 0x00000004  ; user32.dll
+WS_EX_TOPMOST = 0x00000008  ; user32.dll
+WS_EX_ACCEPTFILES = 0x00000010  ; user32.dll
+WS_EX_TRANSPARENT = 0x00000020  ; user32.dll
+WS_EX_MDICHILD = 0x00000040  ; user32.dll
+WS_EX_TOOLWINDOW = 0x00000080  ; user32.dll
+WS_EX_WINDOWEDGE = 0x00000100  ; user32.dll
+WS_EX_CLIENTEDGE = 0x00000200  ; user32.dll
+WS_EX_CONTEXTHELP = 0x00000400  ; user32.dll
+WS_EX_RIGHT = 0x00001000  ; user32.dll
+WS_EX_LEFT = 0x00000000  ; user32.dll
+WS_EX_LAYERED = 0x00080000  ; user32.dll
+
+# category: ShowWindow commands (user32)
+SW_HIDE = 0  ; user32.dll
+SW_SHOWNORMAL = 1  ; user32.dll
+SW_NORMAL = 1  ; user32.dll
+SW_SHOWMINIMIZED = 2  ; user32.dll
+SW_SHOWMAXIMIZED = 3  ; user32.dll
+SW_MAXIMIZE = 3  ; user32.dll
+SW_SHOWNOACTIVATE = 4  ; user32.dll
+SW_SHOW = 5  ; user32.dll
+SW_MINIMIZE = 6  ; user32.dll
+SW_SHOWMINNOACTIVE = 7  ; user32.dll
+SW_SHOWNA = 8  ; user32.dll
+SW_RESTORE = 9  ; user32.dll
+SW_SHOWDEFAULT = 10  ; user32.dll
+SW_FORCEMINIMIZE = 11  ; user32.dll
+
+# category: GetWindowLong / SetWindowLong offsets (user32)
+GWL_WNDPROC = -4  ; user32.dll
+GWL_HINSTANCE = -6  ; user32.dll
+GWL_HWNDPARENT = -8  ; user32.dll
+GWL_STYLE = -16  ; user32.dll
+GWL_EXSTYLE = -20  ; user32.dll
+GWL_USERDATA = -21  ; user32.dll
+GWL_ID = -12  ; user32.dll
+GWLP_WNDPROC = -4  ; user32.dll
+GWLP_HINSTANCE = -6  ; user32.dll
+GWLP_HWNDPARENT = -8  ; user32.dll
+GWLP_USERDATA = -21  ; user32.dll
+GWLP_ID = -12  ; user32.dll
+
+# category: CreateWindow defaults (user32)
+CW_USEDEFAULT = 0x80000000  ; user32.dll
+
+# category: Standard cursors (user32)
+IDC_ARROW = 32512  ; user32.dll
+IDC_IBEAM = 32513  ; user32.dll
+IDC_WAIT = 32514  ; user32.dll
+IDC_CROSS = 32515  ; user32.dll
+IDC_UPARROW = 32516  ; user32.dll
+IDC_SIZE = 32640  ; user32.dll
+IDC_ICON = 32641  ; user32.dll
+IDC_SIZENWSE = 32642  ; user32.dll
+IDC_SIZENESW = 32643  ; user32.dll
+IDC_SIZEWE = 32644  ; user32.dll
+IDC_SIZENS = 32645  ; user32.dll
+IDC_SIZEALL = 32646  ; user32.dll
+IDC_NO = 32648  ; user32.dll
+IDC_HAND = 32649  ; user32.dll
+IDC_APPSTARTING = 32650  ; user32.dll
+IDC_HELP = 32651  ; user32.dll
+
+# category: Standard icons (user32)
+IDI_APPLICATION = 32512  ; user32.dll
+IDI_HAND = 32513  ; user32.dll
+IDI_QUESTION = 32514  ; user32.dll
+IDI_EXCLAMATION = 32515  ; user32.dll
+IDI_ASTERISK = 32516  ; user32.dll
+IDI_WINLOGO = 32517  ; user32.dll
+IDI_SHIELD = 32518  ; user32.dll
+
+# category: System metrics indices (user32)
+SM_CXSCREEN = 0  ; user32.dll
+SM_CYSCREEN = 1  ; user32.dll
+SM_CXFULLSCREEN = 16  ; user32.dll
+SM_CYFULLSCREEN = 17  ; user32.dll
+SM_CXBORDER = 5  ; user32.dll
+SM_CYBORDER = 6  ; user32.dll
+SM_CXFRAME = 32  ; user32.dll
+SM_CYFRAME = 33  ; user32.dll
+SM_CXMINTRACK = 34  ; user32.dll
+SM_CYMINTRACK = 35  ; user32.dll
+SM_CXCURSOR = 13  ; user32.dll
+SM_CYCURSOR = 14  ; user32.dll
+SM_CXICON = 11  ; user32.dll
+SM_CYICON = 12  ; user32.dll
+SM_CMONITORS = 80  ; user32.dll
+SM_REMOTESESSION = 0x1000  ; user32.dll
+
+# category: GDI background modes (gdi32)
+TRANSPARENT = 1  ; gdi32.dll
+OPAQUE = 2  ; gdi32.dll
+
+# category: GDI mapping modes (gdi32)
+MM_TEXT = 1  ; gdi32.dll
+MM_LOMETRIC = 2  ; gdi32.dll
+MM_HIMETRIC = 3  ; gdi32.dll
+MM_LOENGLISH = 4  ; gdi32.dll
+MM_HIENGLISH = 5  ; gdi32.dll
+MM_TWIPS = 6  ; gdi32.dll
+MM_ISOTROPIC = 7  ; gdi32.dll
+MM_ANISOTROPIC = 8  ; gdi32.dll
+
+# category: GDI ROP codes — BitBlt raster operations (gdi32)
+SRCCOPY = 0x00CC0020  ; gdi32.dll
+SRCPAINT = 0x00EE0086  ; gdi32.dll
+SRCAND = 0x008800C6  ; gdi32.dll
+SRCINVERT = 0x00660046  ; gdi32.dll
+SRCERASE = 0x00440328  ; gdi32.dll
+NOTSRCCOPY = 0x00330008  ; gdi32.dll
+NOTSRCERASE = 0x001100A6  ; gdi32.dll
+MERGECOPY = 0x00C000CA  ; gdi32.dll
+MERGEPAINT = 0x00BB0226  ; gdi32.dll
+PATCOPY = 0x00F00021  ; gdi32.dll
+PATPAINT = 0x00FB0A09  ; gdi32.dll
+PATINVERT = 0x005A0049  ; gdi32.dll
+DSTINVERT = 0x00550009  ; gdi32.dll
+BLACKNESS = 0x00000042  ; gdi32.dll
+WHITENESS = 0x00FF0062  ; gdi32.dll
+
+# category: Process / thread access rights (kernel32)
+PROCESS_TERMINATE = 0x0001  ; kernel32.dll
+PROCESS_CREATE_THREAD = 0x0002  ; kernel32.dll
+PROCESS_VM_OPERATION = 0x0008  ; kernel32.dll
+PROCESS_VM_READ = 0x0010  ; kernel32.dll
+PROCESS_VM_WRITE = 0x0020  ; kernel32.dll
+PROCESS_DUP_HANDLE = 0x0040  ; kernel32.dll
+PROCESS_CREATE_PROCESS = 0x0080  ; kernel32.dll
+PROCESS_SET_QUOTA = 0x0100  ; kernel32.dll
+PROCESS_SET_INFORMATION = 0x0200  ; kernel32.dll
+PROCESS_QUERY_INFORMATION = 0x0400  ; kernel32.dll
+PROCESS_ALL_ACCESS = 0x1FFFFF  ; kernel32.dll
+
+# category: File / generic access rights (kernel32)
+GENERIC_READ = 0x80000000  ; kernel32.dll
+GENERIC_WRITE = 0x40000000  ; kernel32.dll
+GENERIC_EXECUTE = 0x20000000  ; kernel32.dll
+GENERIC_ALL = 0x10000000  ; kernel32.dll
+FILE_SHARE_READ = 0x00000001  ; kernel32.dll
+FILE_SHARE_WRITE = 0x00000002  ; kernel32.dll
+FILE_SHARE_DELETE = 0x00000004  ; kernel32.dll
+CREATE_NEW = 1  ; kernel32.dll
+CREATE_ALWAYS = 2  ; kernel32.dll
+OPEN_EXISTING = 3  ; kernel32.dll
+OPEN_ALWAYS = 4  ; kernel32.dll
+TRUNCATE_EXISTING = 5  ; kernel32.dll
+FILE_ATTRIBUTE_READONLY = 0x00000001  ; kernel32.dll
+FILE_ATTRIBUTE_HIDDEN = 0x00000002  ; kernel32.dll
+FILE_ATTRIBUTE_SYSTEM = 0x00000004  ; kernel32.dll
+FILE_ATTRIBUTE_DIRECTORY = 0x00000010  ; kernel32.dll
+FILE_ATTRIBUTE_ARCHIVE = 0x00000020  ; kernel32.dll
+FILE_ATTRIBUTE_NORMAL = 0x00000080  ; kernel32.dll
+
+# category: Memory allocation (VirtualAlloc) (kernel32)
+MEM_COMMIT = 0x1000  ; kernel32.dll
+MEM_RESERVE = 0x2000  ; kernel32.dll
+MEM_DECOMMIT = 0x4000  ; kernel32.dll
+MEM_RELEASE = 0x8000  ; kernel32.dll
+MEM_FREE = 0x10000  ; kernel32.dll
+MEM_PRIVATE = 0x20000  ; kernel32.dll
+MEM_MAPPED = 0x40000  ; kernel32.dll
+MEM_RESET = 0x80000  ; kernel32.dll
+PAGE_NOACCESS = 0x01  ; kernel32.dll
+PAGE_READONLY = 0x02  ; kernel32.dll
+PAGE_READWRITE = 0x04  ; kernel32.dll
+PAGE_WRITECOPY = 0x08  ; kernel32.dll
+PAGE_EXECUTE = 0x10  ; kernel32.dll
+PAGE_EXECUTE_READ = 0x20  ; kernel32.dll
+PAGE_EXECUTE_READWRITE = 0x40  ; kernel32.dll
+PAGE_EXECUTE_WRITECOPY = 0x80  ; kernel32.dll
+PAGE_GUARD = 0x100  ; kernel32.dll
+PAGE_NOCACHE = 0x200  ; kernel32.dll
+
+# category: Standard handles (kernel32)
+STD_INPUT_HANDLE = -10  ; kernel32.dll
+STD_OUTPUT_HANDLE = -11  ; kernel32.dll
+STD_ERROR_HANDLE = -12  ; kernel32.dll
+INVALID_HANDLE_VALUE = -1  ; kernel32.dll
+
+# category: WaitForSingleObject return values (kernel32)
+WAIT_OBJECT_0 = 0x00000000  ; kernel32.dll
+WAIT_ABANDONED = 0x00000080  ; kernel32.dll
+WAIT_TIMEOUT = 0x00000102  ; kernel32.dll
+WAIT_FAILED = 0xFFFFFFFF  ; kernel32.dll
+INFINITE = 0xFFFFFFFF  ; kernel32.dll
+
+# category: HRESULT severity / common (combase/kernel32)
+S_OK = 0  ; kernel32.dll
+S_FALSE = 1  ; kernel32.dll
+E_FAIL = 0x80004005  ; kernel32.dll
+E_INVALIDARG = 0x80070057  ; kernel32.dll
+E_OUTOFMEMORY = 0x8007000E  ; kernel32.dll
+E_NOTIMPL = 0x80004001  ; kernel32.dll
+E_POINTER = 0x80004003  ; kernel32.dll
+E_NOINTERFACE = 0x80004002  ; kernel32.dll
+E_ABORT = 0x80004004  ; kernel32.dll
+E_ACCESSDENIED = 0x80070005  ; kernel32.dll
+E_HANDLE = 0x80070006  ; kernel32.dll
+E_UNEXPECTED = 0x8000FFFF  ; kernel32.dll
+
+# category: Win32 error codes (kernel32, from GetLastError)
+ERROR_SUCCESS = 0  ; kernel32.dll
+ERROR_INVALID_FUNCTION = 1  ; kernel32.dll
+ERROR_FILE_NOT_FOUND = 2  ; kernel32.dll
+ERROR_PATH_NOT_FOUND = 3  ; kernel32.dll
+ERROR_ACCESS_DENIED = 5  ; kernel32.dll
+ERROR_INVALID_HANDLE = 6  ; kernel32.dll
+ERROR_NOT_ENOUGH_MEMORY = 8  ; kernel32.dll
+ERROR_INVALID_DATA = 13  ; kernel32.dll
+ERROR_NO_MORE_FILES = 18  ; kernel32.dll
+ERROR_NOT_READY = 21  ; kernel32.dll
+ERROR_BAD_COMMAND = 22  ; kernel32.dll
+ERROR_SHARING_VIOLATION = 32  ; kernel32.dll
+ERROR_LOCK_VIOLATION = 33  ; kernel32.dll
+ERROR_HANDLE_EOF = 38  ; kernel32.dll
+ERROR_FILE_EXISTS = 80  ; kernel32.dll
+ERROR_INVALID_PARAMETER = 87  ; kernel32.dll
+ERROR_BROKEN_PIPE = 109  ; kernel32.dll
+ERROR_BUFFER_OVERFLOW = 111  ; kernel32.dll
+ERROR_DISK_FULL = 112  ; kernel32.dll
+ERROR_INSUFFICIENT_BUFFER = 122  ; kernel32.dll
+ERROR_INVALID_NAME = 123  ; kernel32.dll
+ERROR_ALREADY_EXISTS = 183  ; kernel32.dll
+ERROR_MORE_DATA = 234  ; kernel32.dll
+ERROR_OPERATION_ABORTED = 995  ; kernel32.dll
+ERROR_IO_PENDING = 997  ; kernel32.dll
+ERROR_NOACCESS = 998  ; kernel32.dll

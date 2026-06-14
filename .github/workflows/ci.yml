@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-lint:
+    name: Build + clippy + fmt (windows-latest)
+    runs-on: windows-latest
+
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Toolchain info
+        shell: pwsh
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: cargo fmt --check
+        shell: pwsh
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        shell: pwsh
+        # No --locked yet — Sprint 01 hasn't committed Cargo.lock to git
+        # (it's gitignored). Add --locked once we pin the lock.
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo build
+        shell: pwsh
+        run: cargo build --workspace
+
+      - name: smoke - nod-driver --version
+        shell: pwsh
+        run: cargo run -p nod-driver --quiet -- --version
+
+# NOTE: Sprint 06 will activate the LLVM-linked workflow on a
+# self-hosted runner (mirroring NewM2's setup). Until inkwell is wired
+# in, windows-latest is enough.

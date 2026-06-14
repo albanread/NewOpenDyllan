@@ -1,0 +1,9 @@
+[package]
+name        = "nod-reader"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+description = "NewOpenDylan: nod-reader (Sprint 01 stub)."
+
+[lints]
+workspace = true

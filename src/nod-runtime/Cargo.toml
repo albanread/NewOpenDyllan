@@ -1,0 +1,92 @@
+[package]
+name        = "nod-runtime"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+description = "NewOpenDylan: tagged-pointer ABI, wrapper headers, bump heap, class metadata."
+
+# Sprint 39a: dual-output. `rlib` keeps the JIT path working (every
+# downstream Rust crate links `nod-runtime` as a Rust library). The
+# `staticlib` output (`nod_runtime.lib` on MSVC, `libnod_runtime.a` on
+# *nix) is what `link.exe` consumes when building a standalone Dylan
+# `.exe` — see `nod-driver`'s `build` subcommand. Both share one
+# compilation; the staticlib is produced as a sibling artifact.
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[features]
+# Sprint 23: GC backend selection.
+#
+# - `newgc-backend` (default): `PageHeap<DylanLayout>` from
+#   `newgc-core`. Page-based mark-evacuate generational collector.
+# - `semispace-backend`: the pre-Sprint-23 lifted-from-NCL semispace
+#   heap. Kept as an escape hatch for one sprint per the
+#   Sprint 23 brief; Sprint 24 will delete it if NewGC sticks.
+#
+# Exactly one must be enabled. Selecting both or neither is a
+# `compile_error!` at the top of `lib.rs`.
+#
+# Sprint 39a — the `nod_user_main` symbol referenced by
+# `nod_aot_main_wrapper` is supplied either by the user's AOT `.obj`
+# (real EXE link) or by `src/aot_user_main_stub.rs` (anything else
+# pulling in the rlib/staticlib). The stub lives in its own translation
+# unit so MSVC's archive-extraction rule only pulls it in when the user
+# didn't define `nod_user_main`. See that file's doc for the long-form
+# rationale.
+default = ["newgc-backend"]
+newgc-backend = ["dep:newgc-core"]
+semispace-backend = []
+
+[dependencies]
+newgc-core = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_System_Memory",
+    "Win32_System_LibraryLoader",
+    "Win32_Foundation",
+] }
+# Sprint 35: typed COM bindings for DXGI / D3D11 / D2D / DirectWrite.
+# The `windows` crate (vs `windows-sys`) provides refcount-correct
+# wrappers — every interface type implements `Clone` (calls AddRef)
+# and `Drop` (calls Release), so a Rust-side `HashMap<u64, ComObject>`
+# is sufficient to own and lifetime-manage the GPU resources Dylan
+# refers to by opaque <c-handle>. Feature selection follows the
+# minimum surface area for offscreen-only Sprint 35:
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+    # Sprint 41c — `SetScrollInfo` (used by the IDE's scrollbar primitive)
+    # lives under the `Win32_UI_Controls` feature in `windows 0.58`, even
+    # though it's linked from `user32.dll`. The companion `GetScrollPos`
+    # is in `Win32_UI_WindowsAndMessaging`, already enabled above.
+    "Win32_UI_Controls",
+    # Sprint 41e — `GetOpenFileNameW` + `OPENFILENAMEW` (the IDE's
+    # File → Open shim) live under `Win32_UI_Controls_Dialogs`. Linked
+    # from `comdlg32.dll`, which the AOT driver also adds to its link
+    # line so the IAT resolves correctly.
+    "Win32_UI_Controls_Dialogs",
+    "Foundation_Numerics",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# Sprint 32: in-module callbacks unit tests must run serially since
+# they mutate the process-global callback registry. The test-runner
+# default runs tests in parallel across threads.
+serial_test = "3"
+
+[lints]
+workspace = true

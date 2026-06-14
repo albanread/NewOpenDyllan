@@ -1,0 +1,12 @@
+# Sprint 52.4 — substitution + hygiene parity unit driver.
+#
+# Bundles the Dylan-side lexer + macro engine + the expand driver into an
+# EXE whose entry point (`expand-main`) prints EXPAND lines for a fixed
+# set of (define-macro, call-site) cases. The Rust gate
+# `tests/nod-tests/tests/macro_expand.rs` cross-checks the expansions
+# against `nod_macro::substitute` under a pinned hygiene nonce.
+
+name           = "dylan-macro-expand"
+sources        = ["../../../compiler/dylan-lexer.dylan", "../../../compiler/dylan-macro.dylan", "dylan-macro-expand.dylan"]
+output         = "dylan-macro-expand.exe"
+start_function = "expand-main"

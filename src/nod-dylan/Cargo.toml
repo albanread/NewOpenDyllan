@@ -1,0 +1,15 @@
+[package]
+name        = "nod-dylan"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+description = "NewOpenDylan: Dylan source kernel library (ported from upstream Open Dylan)."
+
+[lib]
+# `nod-dylan` is a *source* package, not a Rust crate. We give it a
+# stub Rust library purely to satisfy Cargo's workspace requirements;
+# the actual deliverable lives under `dylan-sources/`. See README.md.
+path = "src/lib.rs"
+
+[lints]
+workspace = true

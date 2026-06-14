@@ -1,0 +1,23 @@
+# Workstation-local LLVM install prefix (static build).
+# inkwell / llvm-sys read LLVM_SYS_221_PREFIX at build time to find
+# headers and static libs. Same install as sibling projects NewM2 and
+# NewCormanLisp; share one LLVM build across the portfolio.
+#
+# Update the path if your LLVM install lives elsewhere.
+
+# Cap build parallelism. The default (= 20 logical CPUs here) tries to link
+# ~20 test binaries at once during `cargo test --workspace`; each LLVM-debug
+# link can use 1-3 GiB, which OOMs the linker (LNK1102 / link.exe exit 1102) on
+# a 32 GiB box. 6 keeps peak link memory well under available RAM. This only
+# throttles mass-parallel builds; single-binary incremental builds aren't
+# job-bound, so normal `cargo build -p nod-driver` is unaffected.
+[build]
+jobs = 6
+
+[env]
+LLVM_SYS_221_PREFIX = "C:\\projects\\LLVM\\install"
+
+# Windows: increase main-thread stack to 16 MiB. Debug codegen frames
+# can blow the default 1 MiB during recursive IR lowering.
+[target.'cfg(target_os = "windows")']
+rustflags = ["-C", "link-arg=/STACK:16777216"]

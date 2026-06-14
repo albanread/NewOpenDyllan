@@ -1,0 +1,40 @@
+# Sprint 51b — Dylan-side lexer side-load shim.
+#
+# Compiles dylan-lexer.dylan + dylan-lex-shim.dylan into a single EXE
+# whose entry point (`shim-main`) reads argv[1] as a source file path,
+# lexes it via the Dylan-side `lex()`, and prints one wire-format line
+# per emitted (non-trivia, post-preamble) token:
+#
+#   KIND SPAN_LO SPAN_HI\n
+#
+# Kind ordinals match `nod_reader::token::TokenKind` per
+# `docs/DYLAN_TOKEN_WIRE.md` §3.
+#
+# Sprint 50d's `start_function` field lets `shim-main` carry a distinct
+# name so this bundle and `dylan-lexer-main.dylan` (which uses `main`)
+# don't collide at link time when bundled into the same workspace.
+
+name           = "dylan-lex-shim"
+# Sprint 51c — `dylan-parser.dylan` is bundled in so the same .obj
+# carries both `dylan-lex-collect` and `dylan-parse-collect` entries
+# under one shared `nod_aot_resolve_relocs`. The parser's own `main`
+# is demoted to internal linkage during AOT entry-stub emission so it
+# doesn't collide with the host driver's `main`.
+# Sprint 54b — `dylan-c3.dylan` + `dylan-sema.dylan` are bundled in so the
+# same .obj carries the `dylan-sema-emit` entry (the Dylan-side sema recording
+# walk, run in-process in the host) alongside the lexer / parser / macro
+# entries, under one shared `nod_aot_resolve_relocs`. `dylan-c3` precedes
+# `dylan-sema` (the sema walk calls `c3-linearise`); both follow the parser
+# (sema walks the `<ast-*>` tree). Class-defining files are safe to bundle —
+# the disjoint shim class-id band absorbs them (see shim class-id band note).
+sources        = [
+    "dylan-lexer.dylan",
+    "dylan-parser.dylan",
+    "dylan-macro.dylan",
+    "dylan-c3.dylan",
+    "dylan-sema.dylan",
+    "dylan-lower.dylan",
+    "dylan-lex-shim.dylan",
+]
+output         = "dylan-lex-shim.exe"
+start_function = "shim-main"

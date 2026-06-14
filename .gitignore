@@ -1,0 +1,16 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+*.pdb
+.vscode/
+.idea/
+*.swp
+tests/nod-tests/fixtures/_tmp/
+
+# DocCrate test-render snapshots (regenerable artifacts)
+tools/doccrate/snaps/
+docs/manual/screen.png
+docs/screen.png
+
+# Claude Code personal settings (machine-local, not shared)
+.claude/settings.local.json

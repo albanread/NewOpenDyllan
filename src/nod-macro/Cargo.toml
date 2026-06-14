@@ -1,0 +1,12 @@
+[package]
+name        = "nod-macro"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+description = "NewOpenDylan: macro expander (Sprint 17 pattern matching engine)."
+
+[dependencies]
+nod-reader = { path = "../nod-reader" }
+
+[lints]
+workspace = true

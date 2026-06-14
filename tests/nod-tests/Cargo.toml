@@ -1,0 +1,37 @@
+[package]
+name        = "nod-tests"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+description = "NewOpenDylan: end-to-end integration tests."
+
+[lib]
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+# Sprint 23: GC backend selection forwarded from `nod-runtime`. Tests
+# that lock down semispace-specific behaviour (e.g. "minor GC empties
+# young" — NewGC's first cycle is within-G0 evacuation, not promotion)
+# are gated by these features so the test suite stays green under
+# whichever backend is active.
+[features]
+default = ["newgc-backend"]
+newgc-backend = ["nod-runtime/newgc-backend", "nod-sema/newgc-backend", "nod-llvm/newgc-backend"]
+semispace-backend = ["nod-runtime/semispace-backend", "nod-sema/semispace-backend", "nod-llvm/semispace-backend"]
+
+[dev-dependencies]
+nod-reader = { path = "../../src/nod-reader" }
+nod-macro = { path = "../../src/nod-macro" }
+nod-namespace = { path = "../../src/nod-namespace" }
+nod-dfm = { path = "../../src/nod-dfm" }
+nod-sema = { path = "../../src/nod-sema", default-features = false }
+nod-llvm = { path = "../../src/nod-llvm", default-features = false }
+nod-runtime = { path = "../../src/nod-runtime", default-features = false }
+nod-winapi = { path = "../../src/nod-winapi" }
+serial_test = "3"
+# Sprint 39b — `aot_win32.rs` uses `cc::windows_registry::find` to
+# locate dumpbin.exe in whatever MSVC install layout the dev box has.
+# Mirrors the dep that nod-driver itself uses for link.exe location.
+cc = "1"

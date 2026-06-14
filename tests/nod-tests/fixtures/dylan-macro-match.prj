@@ -1,0 +1,12 @@
+# Sprint 52.3 — pattern-matching parity unit driver.
+#
+# Bundles the Dylan-side lexer + macro engine + the match driver into an
+# EXE whose entry point (`match-main`) runs a fixed set of (define-macro,
+# call-site) cases through `match-pattern` and prints CASE/BIND lines.
+# The Rust gate `tests/nod-tests/tests/macro_match.rs` checks the output
+# against Rust's `nod_macro::match_pattern` over the same cases.
+
+name           = "dylan-macro-match"
+sources        = ["../../../compiler/dylan-lexer.dylan", "../../../compiler/dylan-macro.dylan", "dylan-macro-match.dylan"]
+output         = "dylan-macro-match.exe"
+start_function = "match-main"

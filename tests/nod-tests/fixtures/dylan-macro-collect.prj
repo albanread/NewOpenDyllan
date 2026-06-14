@@ -1,0 +1,15 @@
+# Sprint 52.2 — Dylan-side macro-collection unit driver.
+#
+# Bundles the Dylan-side lexer + the macro engine + the collect driver
+# into one EXE whose entry point (`collect-main`) reads argv[1] as a
+# source path, runs `collect-macro-defs`, and prints a COLLECTED/MACRO
+# report. The Rust gate `tests/nod-tests/tests/macro_collect.rs` builds
+# this and checks counts/names against Rust's `collect_macros`.
+#
+# No `dylan-parser.dylan` here — collection operates on tokens/fragments,
+# below the AST, so the parser isn't needed.
+
+name           = "dylan-macro-collect"
+sources        = ["../../../compiler/dylan-lexer.dylan", "../../../compiler/dylan-macro.dylan", "dylan-macro-collect.dylan"]
+output         = "dylan-macro-collect.exe"
+start_function = "collect-main"

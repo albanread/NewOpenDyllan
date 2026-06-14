@@ -1,0 +1,7 @@
+## Sprint 27: vendored Windows API SQLite database.
+## ~28 MB binary; mark explicitly so git doesn't try to text-diff or
+## end-of-line-normalise it.
+data/windows_api.db binary
+*.db binary
+*.bin binary
+*.zst binary

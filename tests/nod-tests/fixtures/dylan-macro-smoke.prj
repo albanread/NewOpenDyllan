@@ -1,0 +1,21 @@
+# Sprint 50c-2/3 — bundle the Dylan-side lexer + the macro engine
+# smoke into one module (`dylan-lexer`). Lets the smoke call the real
+# lexer's `<token>` machinery, group-balance hash-prefixed groups,
+# and use `token-source-text` to round-trip every keyword.
+#
+# Sprint 50d added `start_function` to the .prj schema so the smoke
+# can use `smoke-main` and not collide with the parser's `main`.
+# Sprint 50c-4 then fixed the AOT pipeline's orphan-`main`-as-C-entry
+# bug — when `entry_function != "main"`, any other source-defined
+# `main` gets renamed to `nod_orphan_main` + Internal linkage so
+# Windows' `mainCRTStartup` calls the synthetic C `main` (which runs
+# `nod_aot_resolve_relocs` first) instead of the orphan.
+#
+# `nod-driver build --project dylan-macro-smoke.prj` produces
+# `dylan-macro-smoke.exe` alongside this file — end-to-end macro
+# engine over the real Dylan-side lexer + parser source.
+
+name           = "dylan-macro-smoke"
+sources        = ["../../../compiler/dylan-lexer.dylan", "../../../compiler/dylan-parser.dylan", "dylan-macro-smoke.dylan"]
+output         = "dylan-macro-smoke.exe"
+start_function = "smoke-main"

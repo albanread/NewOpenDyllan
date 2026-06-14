@@ -1,0 +1,11 @@
+# Sprint 51a — Dylan-side C3 linearisation smoke.
+#
+# First sema-piece port. Self-contained (no lexer/parser dependencies),
+# uses the Sprint 50d `start_function` field so the entry name `c3-main`
+# reads cleanly at the call site. The single-file bundle exercises the
+# .prj infrastructure at the minimum-viable scale.
+
+name           = "dylan-c3-smoke"
+sources        = ["dylan-c3-smoke.dylan"]
+output         = "dylan-c3-smoke.exe"
+start_function = "c3-main"
