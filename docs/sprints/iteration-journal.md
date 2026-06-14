@@ -21,6 +21,23 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 
 *(newest first)*
 
+### 2026-06-14 — Iteration 13: fix `head(#())`/`tail(#())` returning garbage (runtime)
+
+- **Bug** (surfaced by iter-12's benchmark run): `nod_pair_tail(#())` /
+  `nod_pair_head(#())` returned raw `0` (not a valid Word) for the empty list, so
+  `empty?(tail(#()))` was *false* and list iterations like `l := tail(tail(l))` /
+  `l = l then tail(l)` never terminated on odd-length lists.
+- **Fix** (`src/nod-runtime/src/lists.rs`): guard the `nil` immediate —
+  `tail(#()) = #()` and `head(#()) = #f` instead of garbage. One runtime function
+  body each, so it's identical on the JIT and AOT paths (no class-id/registration
+  risk). Verified by build+run: `empty?(tail(#())) = 1`; `tail(#(1))` still empty;
+  in-tree 55/55, nod-runtime 144/0, smoke-aot OK, `for` battery still 15/15/10/60,
+  corpus unchanged at 58 (correctness fix, not a compile-count mover).
+- **Build note:** `cargo build -p nod-driver` did NOT reliably rebuild `nod-runtime`
+  for the AOT-EXE link path — an explicit `cargo build -p nod-runtime` was needed for
+  the fix to reach a built EXE. Relevant to why agent worktree build+run checks can
+  diverge from a clean-`main` rebuild. See [[aot-build-run-verification]].
+
 ### 2026-06-14 — Iteration 12: complete the Dylan `for` loop (agent, worktree) — compile 55 → 58
 
 - **What:** generalised `for` lowering (`src/nod-sema/src/lower.rs`) from single-numeric

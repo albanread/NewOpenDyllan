@@ -104,6 +104,12 @@ pub unsafe extern "C" fn nod_pair_alloc(head_raw: u64, tail_raw: u64) -> u64 {
 /// `p_raw` is any valid Dylan Word.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nod_pair_head(p_raw: u64) -> u64 {
+    let imm = crate::literal_pool_immediates();
+    // `head(#())` — the empty list has no head. Return `#f` rather than the
+    // raw-0 garbage the `None` arm used to yield (which is not a valid Word).
+    if p_raw == imm.nil.raw() {
+        return imm.false_.raw();
+    }
     let w = Word::from_raw(p_raw);
     // SAFETY: try_pair walks the wrapper-first invariant the runtime
     // upholds for every pointer-tagged Word it hands out.
@@ -121,6 +127,13 @@ pub unsafe extern "C" fn nod_pair_head(p_raw: u64) -> u64 {
 /// Same as `nod_pair_head`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nod_pair_tail(p_raw: u64) -> u64 {
+    let imm = crate::literal_pool_immediates();
+    // `tail(#()) = #()` — keeps list iteration (`l = l then tail(l)` /
+    // `tail(tail(l))`) terminating instead of reading raw-0 garbage that
+    // `empty?` then sees as non-empty. Matches the common Dylan convention.
+    if p_raw == imm.nil.raw() {
+        return imm.nil.raw();
+    }
     let w = Word::from_raw(p_raw);
     // SAFETY: see `nod_pair_head`.
     match unsafe { try_pair(w, ClassId::PAIR) } {
