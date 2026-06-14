@@ -89,6 +89,13 @@ and that single cut line shapes the whole project.
 | [Upstream Open Dylan](reference/upstream-opendylan.md) | Adoption notes, license obligations, the lifting workflow |
 | [Tracing & diagnostics](reference/tracing.md) | GC tracing and AOT crash symbolication |
 
+## Development
+
+| Page | What it covers |
+|------|----------------|
+| [Sprints](sprints/README.md) | Active and recent sprint plans |
+| [Sprint 60](sprints/sprint-60.md) | Current sprint — bootstrap proof, stdlib reorg + precedence, macros, corpus |
+
 ## Conventions used throughout
 
 - **DFM** — *Dylan Flow Machine*, the typed-SSA IR that splits front-end
