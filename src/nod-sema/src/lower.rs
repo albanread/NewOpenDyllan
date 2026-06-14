@@ -4595,8 +4595,18 @@ fn lower_method_item(
         .collect::<Vec<_>>()
         .join("_");
     let body_fn_name = format!("{name}${suffix}");
-    let function =
-        lower_function_inner(id, &body_fn_name, params, return_sig, body, span, ctx, sink)?;
+    // Codegen name is mangled; closure-registry key is the SOURCE name.
+    let function = lower_function_inner_keyed(
+        id,
+        &body_fn_name,
+        name,
+        params,
+        return_sig,
+        body,
+        span,
+        ctx,
+        sink,
+    )?;
     let _ = receiver_class;
     let registration = MethodRegistration {
         generic_name: name.to_string(),
@@ -4649,7 +4659,28 @@ fn lower_function_inner(
     ctx: &LowerCtx,
     sink: &mut LiftSink,
 ) -> Result<Function, LoweringError> {
+    lower_function_inner_keyed(id, name, name, params, return_sig, body, span, ctx, sink)
+}
+
+/// Like [`lower_function_inner`] but with an explicit `closure_key` — the
+/// name under which the lift pre-pass recorded this body's cell-promotion
+/// set and local-method lifts. For `define method` the codegen `name` is
+/// mangled (`name$specialisers`) while the registry is keyed on the
+/// source name, so the two differ.
+#[allow(clippy::too_many_arguments)]
+fn lower_function_inner_keyed(
+    id: FunctionId,
+    name: &str,
+    closure_key: &str,
+    params: &[Param],
+    return_sig: Option<&ReturnSig>,
+    body: &[Statement],
+    span: Span,
+    ctx: &LowerCtx,
+    sink: &mut LiftSink,
+) -> Result<Function, LoweringError> {
     let mut b = FunctionBuilder::new(id, name.to_string(), span);
+    b.closure_key = closure_key.to_string();
     let mut env = LocalEnv::new();
 
     // Sprint 24: closure-body bring-up. If `name` is the lifted body of
@@ -4674,9 +4705,10 @@ fn lower_function_inner(
     // Sprint 24: cell-promotion locals for this body. Any local in
     // `cell_locals` whose `let` binding is encountered while lowering
     // becomes a `<cell>` allocation; subsequent reads / writes go
-    // through the cell.
+    // through the cell. Keyed on `closure_key` (the source name for
+    // methods), matching how the lift pre-pass recorded them.
     if let Some(reg) = ctx.closures
-        && let Some(cells) = reg.cell_locals_for(name)
+        && let Some(cells) = reg.cell_locals_for(closure_key)
     {
         b.cell_ctx.cell_locals = cells.clone();
     }
@@ -4804,11 +4836,15 @@ fn lower_function_inner(
                     }
                 }
             }
-            Statement::Local { span, .. } => {
-                return Err(LoweringError::Unsupported {
-                    span: *span,
-                    message: "`local method` not lowered in Sprint 06".to_string(),
-                });
+            Statement::Local { span, methods } => {
+                // `local method … end` — bind each named local method to
+                // a closure cell (see `lower_local_methods`). The group
+                // has no value of its own.
+                let key = b.closure_key.clone();
+                b.lower_local_methods(&key, methods, &mut env, ctx, *span)?;
+                if is_last {
+                    final_temp = None;
+                }
             }
             Statement::While { cond, body: wbody, .. } => {
                 // Sprint 18: `while (cond) body end`. Three-block CFG
@@ -5169,6 +5205,10 @@ pub struct ClosureRegistry {
     /// `enclosing_function_name -> set of locals captured by inner
     /// closures`. Drives cell-promotion in the enclosing body's lowering.
     pub cell_locals_per_function: HashMap<String, HashSet<String>>,
+    /// `enclosing_function_name -> (local-method source name ->
+    /// lifted-body name)`. Lets the `Statement::Local` lowering find the
+    /// `ClosureInfo` for each named local method.
+    pub local_lifted_names: HashMap<String, HashMap<String, String>>,
 }
 
 impl ClosureRegistry {
@@ -5177,6 +5217,18 @@ impl ClosureRegistry {
     }
     pub fn cell_locals_for(&self, function_name: &str) -> Option<&HashSet<String>> {
         self.cell_locals_per_function.get(function_name)
+    }
+    /// For `function_name`, map a local-method source name to its lifted
+    /// top-level body name (and thence its `ClosureInfo`).
+    pub fn local_lifted_for(
+        &self,
+        function_name: &str,
+        local_name: &str,
+    ) -> Option<&str> {
+        self.local_lifted_names
+            .get(function_name)
+            .and_then(|m| m.get(local_name))
+            .map(|s| s.as_str())
     }
 }
 
@@ -5314,11 +5366,117 @@ fn lift_statement(
             }
         }
         Statement::Local { methods, .. } => {
-            // Local methods bind their name in scope; their bodies are
-            // not yet lifted (Sprint 06 lowering errors on local methods
-            // with `Unsupported`).
-            for m in methods {
-                scope.in_scope.insert(m.name.clone());
+            // `local method NAME (params) body end` — lift each local
+            // method to a top-level `DefineFunction` (sharing the
+            // closure/cell machinery used by anonymous `method` literals)
+            // and register a `ClosureInfo`. The local-method names are
+            // bound in the enclosing scope; references to a sibling or to
+            // itself become captures (enabling self / mutual recursion),
+            // so they are recorded as cell-promoted locals of the
+            // enclosing function. The `Statement::Local` node is left in
+            // place; the lowering pass emits, per method:
+            //   1. a fresh cell bound to NAME (created up-front for the
+            //      whole group so mutual references see live cells),
+            //   2. a `%make-closure` capturing those cells,
+            //   3. a `%cell-set!` storing the closure into NAME's cell.
+            let local_names: HashSet<String> =
+                methods.iter().map(|m| m.name.clone()).collect();
+            // The local-method names are visible to siblings and to
+            // themselves; add them to the enclosing scope first.
+            for n in &local_names {
+                scope.in_scope.insert(n.clone());
+            }
+            for m in methods.iter_mut() {
+                // Free-var walk for this method's body. inner_scope is
+                // the lifted body's own scope (top + its params); a name
+                // referenced from the body that lives in the enclosing
+                // scope (which now includes sibling/self local-method
+                // names) is a capture.
+                let mut inner_scope: HashSet<String> = st.top.clone();
+                for p in m.params.iter() {
+                    inner_scope.insert(p.name.clone());
+                }
+                let mut free_seq: Vec<(Span, String)> = Vec::new();
+                for sub in m.body.iter() {
+                    check_free_vars_in_stmt(
+                        sub,
+                        &mut inner_scope,
+                        &scope.in_scope,
+                        st.top,
+                        &mut free_seq,
+                    );
+                }
+                let mut captured: Vec<String> = Vec::new();
+                let mut seen: HashSet<String> = HashSet::new();
+                for (_, n) in &free_seq {
+                    if seen.insert(n.clone()) {
+                        captured.push(n.clone());
+                    }
+                }
+
+                // Every captured name must be cell-promoted in the
+                // enclosing function (its own locals/params become cells;
+                // sibling/self local-method names are cells holding the
+                // closure Word).
+                if !captured.is_empty() {
+                    let bucket = st
+                        .registry
+                        .cell_locals_per_function
+                        .entry(scope.enclosing_fn.clone())
+                        .or_default();
+                    for c in &captured {
+                        bucket.insert(c.clone());
+                    }
+                }
+                // The local method's OWN name is always cell-promoted —
+                // even with an empty capture set — because the enclosing
+                // body stores the freshly-made closure into that cell and
+                // call sites read it back through `%cell-get`.
+                st.registry
+                    .cell_locals_per_function
+                    .entry(scope.enclosing_fn.clone())
+                    .or_default()
+                    .insert(m.name.clone());
+
+                // Lift the body to a top-level function under a unique
+                // name (the source name may repeat across enclosing
+                // methods). The closure is registered under this lifted
+                // name; the `Statement::Local` lowering looks it up by
+                // the source name via `local_lifted_name`.
+                let id = ANON_METHOD_COUNTER.fetch_add(1, Ordering::SeqCst);
+                let lifted_name = format!("__local-method-{}-{}", m.name, id);
+
+                let mut new_fn = Item::DefineFunction {
+                    span: m.span,
+                    modifiers: Vec::new(),
+                    name: lifted_name.clone(),
+                    params: m.params.clone(),
+                    return_: m.return_.clone(),
+                    body: m.body.clone(),
+                };
+                // Recursively lift nested method literals / local methods
+                // inside this body. The new enclosing function is the
+                // lifted body itself.
+                lift_item(&mut new_fn, st);
+                st.new_items.push(new_fn);
+
+                st.registry.by_lifted_name.insert(
+                    lifted_name.clone(),
+                    ClosureInfo {
+                        lifted_name: lifted_name.clone(),
+                        captured,
+                        arity: m.params.len(),
+                        span: m.span,
+                    },
+                );
+                // Record the source-name → lifted-name mapping for this
+                // enclosing function so the lowering pass can find the
+                // ClosureInfo from the `Statement::Local` node.
+                st.registry
+                    .local_lifted_names
+                    .entry(scope.enclosing_fn.clone())
+                    .or_default()
+                    .insert(m.name.clone(), lifted_name);
             }
         }
         Statement::While { cond, body, .. } | Statement::Until { cond, body, .. } => {
@@ -5899,6 +6057,13 @@ struct FunctionBuilder {
     /// `%cell-get` / `%cell-set!` and to lower a `%env-cell` indirection
     /// for variables that live in the enclosing environment.
     cell_ctx: CellCtx,
+    /// Key used to look this body up in the `ClosureRegistry`
+    /// (`cell_locals_per_function`, `local_lifted_names`). For
+    /// `define function` and lifted thunks this equals `func.name`; for
+    /// `define method` it is the SOURCE name (`func.name` is the mangled
+    /// `name$specialisers`, but the lift pre-pass keys on the source
+    /// name). Set by `lower_function_inner`.
+    closure_key: String,
 }
 
 impl FunctionBuilder {
@@ -5920,6 +6085,7 @@ impl FunctionBuilder {
             return_type: TypeEstimate::Unit,
             span,
         };
+        let closure_key = func.name.clone();
         Self {
             func,
             current: 0,
@@ -5927,6 +6093,7 @@ impl FunctionBuilder {
             next_block: 1,
             last_temp: None,
             cell_ctx: CellCtx::default(),
+            closure_key,
         }
     }
 
@@ -6526,6 +6693,107 @@ impl FunctionBuilder {
             safepoint_roots: Vec::new(), is_no_alloc: false,
         });
         dst
+    }
+
+    /// Lower a `local method … end` group (`Statement::Local`).
+    ///
+    /// The lift pre-pass already emitted a top-level `DefineFunction` for
+    /// each local method's body and recorded a `ClosureInfo` keyed by a
+    /// synthetic lifted name (mapped from the source name via
+    /// `local_lifted_for`). Here we:
+    ///   1. Bind each local-method NAME to a fresh `<cell>` (initialised
+    ///      to `#f`) in `env`. All cells are created first so a method can
+    ///      refer to a sibling (or itself) that is defined later in the
+    ///      group — mutual / self recursion.
+    ///   2. For each method, build its closure with `%make-closure`,
+    ///      capturing the (now-live) cells, and store the closure Word
+    ///      back into NAME's cell via `%cell-set!`.
+    ///
+    /// NAME is in `cell_ctx.cell_locals` (the lift pass marked it), so a
+    /// later `NAME()` call reads the cell via `%cell-get` and invokes the
+    /// closure through the `nod_funcall_N` trampoline.
+    fn lower_local_methods(
+        &mut self,
+        enclosing_fn: &str,
+        methods: &[nod_reader::LocalMethodDecl],
+        env: &mut LocalEnv,
+        ctx: &LowerCtx,
+        span: Span,
+    ) -> Result<(), LoweringError> {
+        let Some(reg) = ctx.closures else {
+            return Err(LoweringError::Unsupported {
+                span,
+                message: "`local method` requires the closure pre-pass".to_string(),
+            });
+        };
+        // Pass 1 — allocate one cell per local method, bound to #f.
+        for m in methods {
+            let init = self.fresh_temp(TypeEstimate::Top);
+            self.push(Computation::Const {
+                dst: init,
+                value: ConstValue::Bool(false),
+            });
+            let cell = self.fresh_temp(TypeEstimate::Top);
+            self.push(Computation::DirectCall {
+                dst: cell,
+                callee: "nod_make_cell".to_string(),
+                args: vec![init],
+                safepoint_roots: Vec::new(),
+                is_no_alloc: false,
+            });
+            env.insert(m.name.clone(), cell);
+        }
+        // Pass 2 — build each closure (capturing the live cells) and
+        // store it into its own cell.
+        for m in methods {
+            let lifted = reg.local_lifted_for(enclosing_fn, &m.name).ok_or_else(|| {
+                LoweringError::Unsupported {
+                    span: m.span,
+                    message: format!(
+                        "`local method` `{}` was not lifted (internal)",
+                        m.name
+                    ),
+                }
+            })?;
+            let info = reg.closure_for(lifted).ok_or_else(|| {
+                LoweringError::Unsupported {
+                    span: m.span,
+                    message: format!(
+                        "no closure info for lifted local method `{lifted}` (internal)"
+                    ),
+                }
+            })?;
+            // Gather the captured cells from env (every captured name is
+            // cell-promoted, including sibling/self local-method names).
+            let mut captured_cells: Vec<TempId> = Vec::with_capacity(info.captured.len());
+            for cap in &info.captured {
+                let Some(&cell_t) = env.get(cap) else {
+                    return Err(LoweringError::UndefinedIdent {
+                        span: m.span,
+                        name: cap.clone(),
+                    });
+                };
+                captured_cells.push(cell_t);
+            }
+            let closure = if info.captured.is_empty() {
+                // No captures: a plain function reference suffices, but we
+                // still store it through the cell so call sites uniformly
+                // read NAME via %cell-get.
+                self.emit_make_function_ref(&info.lifted_name, info.arity)
+            } else {
+                self.emit_make_closure(&info.lifted_name, info.arity, &captured_cells)
+            };
+            let cell_t = *env.get(&m.name).expect("cell created in pass 1");
+            let set_dst = self.fresh_temp(TypeEstimate::Top);
+            self.push(Computation::DirectCall {
+                dst: set_dst,
+                callee: "nod_cell_set".to_string(),
+                args: vec![closure, cell_t],
+                safepoint_roots: Vec::new(),
+                is_no_alloc: false,
+            });
+        }
+        Ok(())
     }
 
     fn emit_sov_element_setter(
@@ -8182,10 +8450,10 @@ impl FunctionBuilder {
                 span: *span,
                 message: "`block` inside loop body not lowered (Sprint 19)".to_string(),
             }),
-            Statement::Local { span, .. } => Err(LoweringError::Unsupported {
-                span: *span,
-                message: "`local method` inside loop body not lowered".to_string(),
-            }),
+            Statement::Local { span, methods } => {
+                let enclosing = self.closure_key.clone();
+                self.lower_local_methods(&enclosing, methods, env, ctx, *span)
+            }
         }
     }
 
@@ -9349,11 +9617,10 @@ fn lower_statements_into(
                     b.set_last_temp(t);
                 }
             }
-            Statement::Local { span, .. } => {
-                return Err(LoweringError::Unsupported {
-                    span: *span,
-                    message: "`local method` not lowered in Sprint 06".to_string(),
-                });
+            Statement::Local { span, methods } => {
+                let enclosing = b.closure_key.clone();
+                b.lower_local_methods(&enclosing, methods, env, ctx, *span)?;
+                b.clear_last_temp();
             }
             Statement::While { cond, body, .. } => {
                 b.lower_while_like(cond, body, false, env, ctx)?;
@@ -9363,11 +9630,19 @@ fn lower_statements_into(
                 b.lower_while_like(cond, body, true, env, ctx)?;
                 b.clear_last_temp();
             }
-            Statement::For { span, .. } => {
-                return Err(LoweringError::Unsupported {
-                    span: *span,
-                    message: "`for` not lowered in Sprint 18".to_string(),
-                });
+            Statement::For {
+                span,
+                clauses,
+                body,
+                finally_,
+            } => {
+                // Desugar numeric `for` to `let` + `while` and lower each
+                // inline into this thunk.
+                let desugared = desugar_numeric_for(*span, clauses, body, finally_)?;
+                for ds in &desugared {
+                    lower_statements_into(b, env, ctx, sink, std::slice::from_ref(ds))?;
+                }
+                b.clear_last_temp();
             }
             Statement::Block {
                 span,
