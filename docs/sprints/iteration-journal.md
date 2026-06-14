@@ -21,6 +21,39 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 
 *(newest first)*
 
+### 2026-06-14 — Iteration 10: REVERTED — agent's runtime change was AOT-broken; new AOT guard
+
+- **Attempt (agent, worktree):** resolve `instance?`/`==`/`~=` as first-class
+  function references + register `<vector>`/`<array>`/`<lock>`/`<thread>` class
+  names. The agent verified via `dump-dfm` + `eval` and reported in-tree 55/55.
+- **Why it was reverted:** on review I built **executables** and ran them — two
+  AOT-only crashes the agent's verification never exercised:
+  1. **Class-id drift** (`aot.rs` drift assert): registering 9 new classes in
+     `collections.rs::ensure_registered` shifted the class-id sequence so the AOT
+     EXE baked one id for `<stream>` but the runtime allocated another — *every*
+     built EXE crashed on startup.
+  2. **Missing AOT shim** (`functions.rs` `nod_make_function_ref: no registered
+     function ==`): the `==`/`~=`/`instance?` func-ref shims were registered in
+     the JIT path but not the AOT runtime path, so `\==` etc. crashed when called
+     from a built EXE.
+  `dump-dfm` only checks *lowering* and `eval` ran against a stale shim, so both
+  bugs were invisible to them. The +1–2 corpus "compile" gain was hollow (files
+  lowered but crashed when run). **Fully reverted to the prior good commit.**
+- **Permanent fix to process:** added `tools/smoke-aot.sh` — builds + RUNS a
+  handful of programs through the AOT pipeline and asserts stdout. Catches exactly
+  this class of bug (the `dump-dfm`/in-tree guards never build an EXE). Run it
+  after any nod-runtime class/shim or nod-sema lowering / AOT codegen change.
+  Green on the current state (arith / for / local method / 0-param method).
+- **Targeting rule learned:** pure-Dylan stdlib additions (iter 8) are AOT-safe by
+  construction — the loader runs identically in JIT and AOT. Rust runtime class /
+  shim registration is delicate (compile-time vs EXE-runtime id/registration
+  consistency) and MUST be build+run verified, registering in the AOT path too.
+- **Bonus finding (pre-existing, deferred):** a function whose body is written on
+  ONE line and contains a `for` loop fails to build (`codegen: unknown callee`),
+  while the identical multi-line form works — a newline-sensitivity gap in the
+  Rust-parser/for-desugar path. Edge case (real corpus code is multi-line); logged
+  in known-limitations.
+
 ### 2026-06-14 — Iteration 9: back-end lowering features (agent, worktree) — compile 52 → 55
 
 - **Approach:** ran a dedicated agent in an isolated git worktree; reviewed +

@@ -139,6 +139,23 @@ or a standing design trade-off are kept here.
 * **Scope**: small.
 * **Status**: open.
 
+## A one-line function body containing a `for` loop fails to build
+
+* **Symptom**: a function whose body is written on a single line and includes a
+  `for` loop — e.g. `define function s (n) let a = 0; for (i from 1 to n) a := a
+  + i end; a end function;` — fails AOT codegen with `codegen: unknown callee
+  's'` (the function silently fails to lower, so callers can't resolve it). The
+  byte-identical **multi-line** form builds and runs correctly (→ 5050). Found by
+  `tools/smoke-aot.sh`.
+* **Workaround**: write the function body across multiple lines (the normal form
+  for real code; the corpus is unaffected).
+* **Planned fix**: trace the newline-sensitivity in the Rust-parser/`for`-desugar
+  path (the one-line statement sequence around `for … end; …` parses to a body
+  the lowerer drops). Add the one-line case to the regression suite once fixed.
+* **Scope**: medium (`src/nod-reader/src/parser.rs` and/or the `for` desugar in
+  `src/nod-sema/src/lower.rs`).
+* **Status**: open.
+
 ## Notes
 
 * A live Sprint 60 corpus + improvement backlog (ranked) is recorded in
