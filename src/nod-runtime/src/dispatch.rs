@@ -43,7 +43,7 @@
 //! makes a stale cache safe.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::classes::{ClassId, class_metadata_ptr, is_subclass};
@@ -400,6 +400,52 @@ pub fn is_generic_defined(generic_name: &str) -> bool {
             .is_empty(),
         None => false,
     }
+}
+
+// ─── `#rest` callee registry ───────────────────────────────────────────────
+//
+// Sprint 60: process-global table of `name -> FIXED` for every callee
+// (top-level `define function` OR dispatched `define method`) declared with a
+// trailing `#rest` parameter. `FIXED` is the pre-`#rest` parameter count — the
+// number of leading actuals passed straight through; the trailing actuals
+// (positions >= FIXED) are collected into ONE `<simple-object-vector>` slot.
+//
+// WHY A PROCESS-GLOBAL TABLE: `#rest` collection is a CALL-SITE rewrite (the
+// lowerer builds the rest SOV before the call so the callee's fixed-arity ABI
+// stays intact — see `lower_call`'s `rest_fixed_count` branch). The per-module
+// `TopNames.rest_fns` only covers the module currently being lowered, but a
+// user module calling the stdlib's `apply` / `compose` / `curry` / `rcurry`
+// (which are `#rest` methods loaded into a DIFFERENT module) needs to know
+// their fixed counts too. This table is the cross-module bridge: the stdlib
+// loader records its `#rest` callees here when it lowers, and user-module
+// call-site lowering consults it (mirroring how `is_generic_defined` exposes
+// the cross-module generic set).
+static REST_CALLEE_FIXED: OnceLock<RwLock<HashMap<String, usize>>> = OnceLock::new();
+
+fn rest_callee_table() -> &'static RwLock<HashMap<String, usize>> {
+    REST_CALLEE_FIXED.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Record that callee `name` takes a `#rest` parameter preceded by `fixed`
+/// required parameters. Idempotent (last writer wins; the count is stable for
+/// a given name). Called by the lowerer for every `#rest` callee it lowers.
+pub fn register_rest_callee(name: &str, fixed: usize) {
+    rest_callee_table()
+        .write()
+        .expect("rest callee table poisoned")
+        .insert(name.to_string(), fixed);
+}
+
+/// Look up the FIXED (pre-`#rest`) parameter count of a `#rest` callee
+/// registered via [`register_rest_callee`]. Returns `None` for callees with no
+/// `#rest` parameter. Consulted by call-site lowering to decide whether to
+/// collect the trailing actuals into a rest SOV.
+pub fn rest_callee_fixed_count(name: &str) -> Option<usize> {
+    rest_callee_table()
+        .read()
+        .expect("rest callee table poisoned")
+        .get(name)
+        .copied()
 }
 
 /// Sprint 20b: look up a method's body function pointer by the

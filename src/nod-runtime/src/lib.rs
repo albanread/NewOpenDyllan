@@ -213,8 +213,8 @@ pub use dispatch::{
     invoke_method_with_self, is_generic_defined, lookup_applicable_methods, lookup_method,
     lookup_method_by_receiver, nod_add_method, nod_dispatch, nod_dispatch_binary,
     nod_dispatch_unary, nod_has_next_method, nod_next_method, nod_pop_sealed_chain_frame,
-    nod_push_sealed_chain_frame, record_resolved_dispatch, remove_method,
-    resolved_dispatch_snapshot, try_add_method_full, word_class_id,
+    nod_push_sealed_chain_frame, record_resolved_dispatch, register_rest_callee, remove_method,
+    rest_callee_fixed_count, resolved_dispatch_snapshot, try_add_method_full, word_class_id,
 };
 pub use make::{
     MAKE_MAX_KW_PAIRS, RootGuard, nod_card_mark, nod_is_instance_of, nod_is_instance_of_word,
