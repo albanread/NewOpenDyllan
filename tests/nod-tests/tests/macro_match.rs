@@ -176,6 +176,24 @@ fn rust_bindings(def_src: &str, call_src: &str) -> Vec<String> {
                     let value = match mf {
                         nod_macro::MatchedFragment::Token(_, s) => s.clone(),
                         nod_macro::MatchedFragment::Frags(v) => render_frags(v, &call_sm),
+                        // Sprint: `*` repetition — a repeated var binds one
+                        // MatchedFragment per iteration. Render as a
+                        // bracketed, ` | `-joined list for the oracle dump.
+                        nod_macro::MatchedFragment::Repeated(items) => {
+                            let parts: Vec<String> = items
+                                .iter()
+                                .map(|it| match it {
+                                    nod_macro::MatchedFragment::Token(_, s) => s.clone(),
+                                    nod_macro::MatchedFragment::Frags(v) => {
+                                        render_frags(v, &call_sm)
+                                    }
+                                    nod_macro::MatchedFragment::Repeated(_) => {
+                                        "<nested-rep>".to_string()
+                                    }
+                                })
+                                .collect();
+                            format!("[{}]", parts.join(" | "))
+                        }
                     };
                     format!("{name} = {value}")
                 })

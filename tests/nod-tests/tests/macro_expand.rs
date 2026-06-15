@@ -85,6 +85,8 @@ fn collect_pattern_var_names(pattern: &[PatternElem]) -> HashSet<String> {
                     out.insert(name.clone());
                 }
                 PatternElem::Group { body, .. } => go(body, out),
+                // `*` repetition: collect the var names inside the repeated unit.
+                PatternElem::Repetition { sub, .. } => go(sub, out),
                 PatternElem::Literal { .. } => {}
             }
         }

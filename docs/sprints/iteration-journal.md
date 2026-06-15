@@ -21,6 +21,29 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 
 *(newest first)*
 
+### 2026-06-15 — Iteration 17: macro `*` repetition + functional stdlib (autonomous wave)
+
+- **Macro engine: zero-or-more repetition.** `{ unit } ...` (optionally `{ unit } ; ...`
+  / `, ...`) in a macro pattern now binds a repeated variable to a sequence and the
+  template splices it back; empty match is valid. Used it to collapse `cond` from 4
+  hard-capped arity rules to ONE uncapped rule. Verified build+run: `cond` with 1, 5,
+  7, and zero clauses all fire the right arm (the old cap couldn't do 5+). nod-macro
+  6/0. (`nod-macro/src/lib.rs` +517, `macros.dylan` cond rewrite.) Also fixed the
+  resulting non-exhaustive-match compile breaks in `tests/nod-tests/tests/
+  macro_match.rs` + `macro_expand.rs` (new `PatternElem::Repetition` /
+  `MatchedFragment::Repeated` arms) so the test crate builds.
+- **stdlib `functional.dylan`** (NEW): `identity`, `complement`, `choose-by`
+  (pure-Dylan, build+run verified: 42 / small / 3).
+- **Real codegen bug found (high-value next target):** the variadic combinators
+  (`compose`/`curry`/`rcurry`/`always`) are BLOCKED because **calling a captured/
+  parameter `<function>` value with 2+ args computes garbage** — only the 1-arg
+  `%funcall1` path is correct; `%funcall2` works for builtin operator refs (`\+`) but
+  NOT user functions. Fixing multi-arg funcall on user `<function>` values unblocks
+  curry/compose + a chunk of higher-order code. Queued.
+- **Verified:** in-tree 55/55 both paths, smoke-aot 6/6, eval=2, nod-macro 6/0,
+  nod-sema 44/0, corpus 60/161 (engine/availability additions, not compile-count
+  movers).
+
 ### 2026-06-15 — Iteration 16: stdlib extension (workflow: sequences + numbers + collections)
 
 A 3-agent workflow (one worktree per category), each build+run-verified by me on main.
