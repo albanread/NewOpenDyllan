@@ -21,6 +21,23 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 
 *(newest first)*
 
+### 2026-06-15 — Iteration 21: `#rest` parameter collection + variadic stdlib
+
+- **`#rest` collection** (`lower.rs`): a `#rest var` param now binds `var` to a fresh
+  sequence of the trailing actual args. Caller-side design — the CALLER builds the rest
+  `<simple-object-vector>` and passes it as one slot, so the callee keeps a fixed-arity
+  LLVM signature and NO codegen/runtime change was needed. `TopNames.rest_fns` tracks
+  each `#rest` function's fixed-param count (round-trips through sema-dump).
+- **Un-deferred variadic stdlib** (call-site shortcuts, any arity): `list(…)` →
+  cons-chain, `vector(…)` → SOV, N-ary `max`/`min` → fold over the binary generic.
+- **Verified build+run:** `f(a,#rest m)=a+size(m)` → f(10,1,2,3)=13, f(5)=5;
+  `g(#rest xs)=reduce(\+,0,xs)` → g(1,2,3,4)=10; `list(10,20,30)` size 3;
+  `vector(1,2,3,4)` size 4; `max(1,9,4,7)=9`, `min(5,2,8,1)=1`. in-tree 55/55 both
+  paths, nod-runtime 150/0, smoke-aot 6/6, corpus 71/161 (capability; corpus bodies
+  gated on the testworks harness).
+- Remaining: N-ary `compose`/multi-arg `curry` need a spread-`apply` on a `<function>`
+  value (distinct from rest-collection) — queued.
+
 ### 2026-06-15 — Iteration 20: DRM class markers batch-2 — corpus 63 → 71
 
 Extended `system-classes.dylan` with 27 more pure-Dylan class-name markers (AOT-safe,
