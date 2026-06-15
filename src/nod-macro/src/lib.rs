@@ -108,6 +108,29 @@ pub enum PatternElem {
     Variable { name: String, kind: PatternKind, span: Span },
     /// A grouped pattern: `(...)`, `[...]`, `{...}`, etc.
     Group { kind: GroupKind, body: Vec<PatternElem>, span: Span },
+    /// Zero-or-more repetition (Sprint 49c).
+    ///
+    /// Surface syntax: a brace group immediately followed by `...`, with
+    /// an OPTIONAL separator token between the `}` and the `...`:
+    ///
+    /// ```text
+    /// { UNIT } ...            // juxtaposed (no separator), e.g. cond clauses
+    /// { UNIT } ; ...          // semicolon-separated
+    /// { UNIT } , ...          // comma-separated
+    /// ```
+    ///
+    /// `UNIT` is the brace group's inner pattern (`sub`). The matcher
+    /// binds every pattern variable inside `sub` to a SEQUENCE of
+    /// matches — one element per repetition — stored as
+    /// [`MatchedFragment::Repeated`]. An empty match (zero repetitions)
+    /// is allowed: every inner variable binds to an empty sequence.
+    Repetition {
+        sub: Vec<PatternElem>,
+        /// Separator token between repetitions, e.g. `;` / `,`. `None`
+        /// means units are juxtaposed (the `cond`/`case` clause shape).
+        separator: Option<(TokenKind, String)>,
+        span: Span,
+    },
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -151,6 +174,25 @@ pub enum TemplateElem {
     Substitution { name: String, span: Span },
     /// Grouped template body.
     Group { kind: GroupKind, body: Vec<TemplateElem>, span: Span },
+    /// Zero-or-more splice (Sprint 49c). Mirror of
+    /// [`PatternElem::Repetition`]. Surface syntax:
+    ///
+    /// ```text
+    /// { UNIT } ...            // juxtaposed
+    /// { UNIT } ; ...          // semicolon-separated
+    /// { UNIT } , ...          // comma-separated
+    /// ```
+    ///
+    /// `UNIT` (`sub`) is re-emitted once per repetition, joined by
+    /// `separator`. The iteration count is the length of the
+    /// [`MatchedFragment::Repeated`] sequence bound to any pattern
+    /// variable that appears in `sub`. With zero iterations nothing is
+    /// emitted (including no separators).
+    Repetition {
+        sub: Vec<TemplateElem>,
+        separator: Option<(TokenKind, String)>,
+        span: Span,
+    },
 }
 
 /// What a pattern variable binds to at the call site.
@@ -162,6 +204,13 @@ pub enum MatchedFragment {
     /// `?x:body`). `?x:expression` always binds exactly one element;
     /// `?x:body` may bind zero or more.
     Frags(Vec<Fragment>),
+    /// One match per repetition iteration (Sprint 49c). A pattern
+    /// variable that appears inside a [`PatternElem::Repetition`] binds
+    /// to `Repeated(vec![per-iteration match, …])`. Length zero is a
+    /// valid (empty) match. Each element is the match that variable
+    /// would have produced in a non-repeated context (typically
+    /// `Frags(_)` or `Token(_, _)`).
+    Repeated(Vec<MatchedFragment>),
 }
 
 pub type Bindings = HashMap<String, MatchedFragment>;
@@ -366,6 +415,23 @@ fn parse_pattern(
             Fragment::Group {
                 kind, body: inner, span, ..
             } => {
+                // Sprint 49c repetition: a BRACE group immediately
+                // followed by an optional separator token and then `...`
+                // (Ellipsis) is a zero-or-more repetition, NOT a literal
+                // brace group. Detect it here so `{ UNIT } ; ...` parses
+                // to a `Repetition`, while a plain `{ … }` stays a Group.
+                if *kind == GroupKind::Brace
+                    && let Some((separator, advance)) = detect_repetition_tail(body, i + 1)
+                {
+                    let sub = parse_pattern(inner, source)?;
+                    out.push(PatternElem::Repetition {
+                        sub,
+                        separator,
+                        span: *span,
+                    });
+                    i += 1 + advance;
+                    continue;
+                }
                 let sub = parse_pattern(inner, source)?;
                 out.push(PatternElem::Group {
                     kind: *kind,
@@ -377,6 +443,36 @@ fn parse_pattern(
         }
     }
     Ok(out)
+}
+
+/// After a brace group at index `start - 1`, look at `body[start..]` for
+/// an optional single separator token followed by `...` (Ellipsis). On a
+/// match return `(separator, fragments_consumed_after_the_group)`; on no
+/// match return `None` (the brace group is a literal group, not a
+/// repetition). The separator is `;` or `,`; any other token between the
+/// group and `...` is rejected (returns `None`) to keep the grammar
+/// unambiguous.
+fn detect_repetition_tail(
+    body: &[Fragment],
+    start: usize,
+) -> Option<(Option<(TokenKind, String)>, usize)> {
+    match body.get(start) {
+        // `{ … } ...`  — juxtaposed, no separator.
+        Some(Fragment::Token(t)) if t.kind == TokenKind::Ellipsis => Some((None, 1)),
+        // `{ … } SEP ...`  — separated by `;` or `,`.
+        Some(Fragment::Token(t))
+            if t.kind == TokenKind::Semicolon || t.kind == TokenKind::Comma =>
+        {
+            match body.get(start + 1) {
+                Some(Fragment::Token(e)) if e.kind == TokenKind::Ellipsis => {
+                    let sep_text = if t.kind == TokenKind::Semicolon { ";" } else { "," };
+                    Some((Some((t.kind, sep_text.to_string())), 2))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 fn parse_pattern_var_head(
@@ -494,6 +590,21 @@ fn parse_template(
             Fragment::Group {
                 kind, body: inner, span, ..
             } => {
+                // Sprint 49c repetition splice (mirror of the pattern
+                // side): `{ UNIT } [SEP] ...` re-emits `UNIT` once per
+                // bound iteration.
+                if *kind == GroupKind::Brace
+                    && let Some((separator, advance)) = detect_repetition_tail(body, i + 1)
+                {
+                    let sub = parse_template(inner, source)?;
+                    out.push(TemplateElem::Repetition {
+                        sub,
+                        separator,
+                        span: *span,
+                    });
+                    i += 1 + advance;
+                    continue;
+                }
                 let sub = parse_template(inner, source)?;
                 out.push(TemplateElem::Group {
                     kind: *kind,
@@ -538,13 +649,41 @@ pub fn collect_macros(
 // ─────────────────────────────────────────────────────────────────────────
 
 /// Match a pattern against a call site's fragment sequence. Greedy,
-/// left-to-right, no backtracking (Sprint 18+ adds it).
+/// left-to-right, no backtracking (Sprint 18+ adds it). Sprint 49c adds
+/// zero-or-more [`PatternElem::Repetition`] support (limited backtracking
+/// at the repetition boundary so the trailing pattern can still match).
+///
+/// Requires the WHOLE call to be consumed — a partial match is not a
+/// match. Inner matching (e.g. a repetition iteration) uses
+/// [`match_pattern_at`], which matches a PREFIX and reports the end.
 pub fn match_pattern(pattern: &[PatternElem], call: &[Fragment]) -> Option<Bindings> {
     let mut b: Bindings = Bindings::new();
-    let mut ci = 0usize;
+    let end = match_pattern_at(pattern, call, 0, &mut b)?;
+    if end != call.len() {
+        return None;
+    }
+    Some(b)
+}
+
+/// Match `pattern` against `call[start..]`, writing bindings into `b`,
+/// and return the call index just past the matched prefix. Unlike
+/// [`match_pattern`] this does NOT require the rest of `call` to be
+/// consumed — it is the reusable core used both at the top level and for
+/// each repetition iteration / trailing-pattern probe.
+fn match_pattern_at(
+    pattern: &[PatternElem],
+    call: &[Fragment],
+    start: usize,
+    b: &mut Bindings,
+) -> Option<usize> {
+    let mut ci = start;
     let mut pi = 0usize;
     while pi < pattern.len() {
         match &pattern[pi] {
+            PatternElem::Repetition { sub, separator, .. } => {
+                ci = match_repetition(pattern, pi, sub, separator, call, ci, b)?;
+                pi += 1;
+            }
             PatternElem::Literal { kind, text, .. } => {
                 let cf = call.get(ci)?;
                 if !token_matches_literal(cf, *kind, text) {
@@ -761,6 +900,8 @@ pub fn match_pattern(pattern: &[PatternElem], call: &[Fragment]) -> Option<Bindi
                 if ck != kind {
                     return None;
                 }
+                // A group must match its body in full (the closing
+                // delimiter bounds it), so use the whole-consume matcher.
                 let sub = match_pattern(pbody, cbody)?;
                 for (k, v) in sub {
                     b.insert(k, v);
@@ -770,10 +911,93 @@ pub fn match_pattern(pattern: &[PatternElem], call: &[Fragment]) -> Option<Bindi
             }
         }
     }
-    if ci != call.len() {
-        return None;
+    Some(ci)
+}
+
+/// Match a zero-or-more [`PatternElem::Repetition`] starting at call
+/// index `ci`. `rep_pi` is the repetition's index in `pattern`; the
+/// elements AFTER it (`pattern[rep_pi + 1..]`) are the trailing pattern
+/// that must match the call once the repetition stops.
+///
+/// Strategy: greedily collect iterations (each a `sub` match, preceded by
+/// `separator` for iterations after the first), then peel iterations back
+/// from the greedy maximum until the trailing pattern matches the
+/// remainder. Zero iterations is valid. Each inner variable is bound to a
+/// [`MatchedFragment::Repeated`] sequence (one element per kept
+/// iteration), so the template can splice them.
+fn match_repetition(
+    pattern: &[PatternElem],
+    rep_pi: usize,
+    sub: &[PatternElem],
+    separator: &Option<(TokenKind, String)>,
+    call: &[Fragment],
+    ci: usize,
+    b: &mut Bindings,
+) -> Option<usize> {
+    let trailing = &pattern[rep_pi + 1..];
+    let var_names = collect_pattern_var_names(sub);
+
+    // 1. Greedily collect iterations: (end_index_after_iteration,
+    //    per-iteration bindings). `iter_ends[k]` is the call index right
+    //    after the (k+1)-th iteration's `sub` (separators are consumed
+    //    BEFORE the iteration they precede, i.e. between iterations).
+    let mut iters: Vec<(usize, Bindings)> = Vec::new();
+    let mut cur = ci;
+    loop {
+        // Consume the separator before all but the first iteration.
+        let iter_start = if iters.is_empty() {
+            cur
+        } else if let Some((sk, st)) = separator {
+            match call.get(cur) {
+                Some(cf) if token_matches_literal(cf, *sk, st) => cur + 1,
+                _ => break, // no separator → repetition is done
+            }
+        } else {
+            cur
+        };
+        let mut ib = Bindings::new();
+        match match_pattern_at(sub, call, iter_start, &mut ib) {
+            Some(end) if end > iter_start || sub.is_empty() => {
+                // Guard against zero-width iterations looping forever.
+                if end == iter_start && !sub.is_empty() {
+                    break;
+                }
+                iters.push((end, ib));
+                cur = end;
+            }
+            _ => break,
+        }
     }
-    Some(b)
+
+    // 2. Peel back from the greedy maximum until the trailing pattern
+    //    matches the remainder (or we hit zero iterations). The trailing
+    //    match is only a GUARD here — we return the index right after the
+    //    kept repetitions and let the CALLER match the trailing pattern
+    //    normally (which binds the trailing variables). This avoids
+    //    double-binding / double-consuming the trailing fragments.
+    loop {
+        let after = iters.last().map(|(e, _)| *e).unwrap_or(ci);
+        // Probe: does the trailing pattern match from `after`? Use a
+        // throwaway bindings map — we discard its bindings.
+        let mut probe = b.clone();
+        if match_pattern_at(trailing, call, after, &mut probe).is_some() {
+            // Commit the repeated bindings (one entry per kept iteration
+            // for every inner variable) and stop just after the
+            // repetitions.
+            for name in &var_names {
+                let seq: Vec<MatchedFragment> = iters
+                    .iter()
+                    .filter_map(|(_, ib)| ib.get(name).cloned())
+                    .collect();
+                b.insert(name.clone(), MatchedFragment::Repeated(seq));
+            }
+            return Some(after);
+        }
+        if iters.pop().is_none() {
+            // Even zero iterations didn't let the trailing pattern match.
+            return None;
+        }
+    }
 }
 
 /// Count the trailing run of `PatternElem::Literal` / `PatternElem::Group`
@@ -784,7 +1008,9 @@ fn count_trailing_literals(rest: &[PatternElem]) -> usize {
     for p in rest.iter().rev() {
         match p {
             PatternElem::Literal { .. } | PatternElem::Group { .. } => n += 1,
-            PatternElem::Variable { .. } => break,
+            // A repetition is variable-arity — like a variable, it is not
+            // a fixed trailer, so the count stops here.
+            PatternElem::Variable { .. } | PatternElem::Repetition { .. } => break,
         }
     }
     n
@@ -1073,10 +1299,80 @@ fn emit_template(
                             emit_fragment_verbatim(f, call_site_source, buf, origins);
                         }
                     }
+                    MatchedFragment::Repeated(items) => {
+                        // A repeated variable referenced OUTSIDE a
+                        // repetition splice. Not a normal shape (the
+                        // template should wrap such a `?x` in `{ … } ...`),
+                        // but emit every iteration's match so nothing is
+                        // silently dropped.
+                        for it in items {
+                            emit_matched_fragment(it, call_site_source, buf, origins);
+                        }
+                    }
                 }
                 // WHY: keep span un-used here; substitution's own span
                 // is the template `?x` reference site, not load-bearing.
                 let _ = span;
+            }
+            TemplateElem::Repetition { sub, separator, .. } => {
+                // Sprint 49c splice: re-emit `sub` once per repetition
+                // iteration, joined by `separator`. The iteration count
+                // is the length of the `Repeated` sequence bound to any
+                // pattern variable that appears in `sub`. With zero
+                // iterations nothing (not even a separator) is emitted.
+                let sub_vars = collect_template_subst_names(sub);
+                let count = sub_vars
+                    .iter()
+                    .filter_map(|n| match bindings.get(n) {
+                        Some(MatchedFragment::Repeated(items)) => Some(items.len()),
+                        _ => None,
+                    })
+                    .max()
+                    .unwrap_or(0);
+                for k in 0..count {
+                    if k > 0
+                        && let Some((_, st)) = separator
+                    {
+                        let lo = buf.len() as u32;
+                        buf.push_str(st);
+                        buf.push(' ');
+                        let hi = lo + st.len() as u32;
+                        origins.push(TokenOrigin {
+                            buf_lo: lo,
+                            buf_hi: hi,
+                            original_span: Span::new(template_file, 0, 0),
+                            from_template: true,
+                        });
+                    }
+                    // Build a per-iteration view: every repeated variable
+                    // is projected to its k-th element; non-repeated
+                    // bindings flow through unchanged.
+                    let mut iter_b: Bindings = Bindings::new();
+                    for (name, m) in bindings.iter() {
+                        match m {
+                            MatchedFragment::Repeated(items) => {
+                                if let Some(elem) = items.get(k) {
+                                    iter_b.insert(name.clone(), elem.clone());
+                                }
+                            }
+                            other => {
+                                iter_b.insert(name.clone(), other.clone());
+                            }
+                        }
+                    }
+                    emit_template(
+                        sub,
+                        &iter_b,
+                        hygiene_nonce,
+                        call_site_source,
+                        template_source,
+                        template_file,
+                        pattern_var_names,
+                        binders,
+                        buf,
+                        origins,
+                    );
+                }
             }
             TemplateElem::Group { kind, body, span } => {
                 let (open, close) = group_delims(*kind);
@@ -1117,6 +1413,60 @@ fn emit_template(
     }
     let _ = template_source;
     let _ = template_file;
+}
+
+/// Emit a single [`MatchedFragment`] (used for repeated-variable items).
+fn emit_matched_fragment(
+    m: &MatchedFragment,
+    call_site_source: &str,
+    buf: &mut String,
+    origins: &mut Vec<TokenOrigin>,
+) {
+    match m {
+        MatchedFragment::Token(t, txt) => {
+            let lo = buf.len() as u32;
+            buf.push_str(txt);
+            buf.push(' ');
+            let hi = lo + txt.len() as u32;
+            origins.push(TokenOrigin {
+                buf_lo: lo,
+                buf_hi: hi,
+                original_span: t.span,
+                from_template: false,
+            });
+        }
+        MatchedFragment::Frags(fs) => {
+            for f in fs {
+                emit_fragment_verbatim(f, call_site_source, buf, origins);
+            }
+        }
+        MatchedFragment::Repeated(items) => {
+            for it in items {
+                emit_matched_fragment(it, call_site_source, buf, origins);
+            }
+        }
+    }
+}
+
+/// Collect the set of substitution (`?x`) names referenced anywhere in a
+/// template sub-tree (recursing into groups and nested repetitions).
+/// Used to find a repetition splice's iteration count.
+fn collect_template_subst_names(template: &[TemplateElem]) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    fn go(t: &[TemplateElem], out: &mut std::collections::HashSet<String>) {
+        for el in t {
+            match el {
+                TemplateElem::Substitution { name, .. } => {
+                    out.insert(name.clone());
+                }
+                TemplateElem::Group { body, .. } => go(body, out),
+                TemplateElem::Repetition { sub, .. } => go(sub, out),
+                TemplateElem::Literal { .. } => {}
+            }
+        }
+    }
+    go(template, &mut out);
+    out
 }
 
 fn emit_fragment_verbatim(
@@ -1238,6 +1588,10 @@ fn walk_template_for_binders(
                 walk_template_for_binders(body, out);
                 i += 1;
             }
+            TemplateElem::Repetition { sub, .. } => {
+                walk_template_for_binders(sub, out);
+                i += 1;
+            }
             _ => i += 1,
         }
     }
@@ -1286,6 +1640,7 @@ fn collect_pv(pattern: &[PatternElem], out: &mut std::collections::HashSet<Strin
                 out.insert(name.clone());
             }
             PatternElem::Group { body, .. } => collect_pv(body, out),
+            PatternElem::Repetition { sub, .. } => collect_pv(sub, out),
             PatternElem::Literal { .. } => {}
         }
     }
@@ -2122,4 +2477,154 @@ end macro;
         assert_eq!(p.len(), 4);
         assert!(matches!(p[1], PatternElem::Variable { kind: PatternKind::Expression, .. }));
     }
+
+    // ── Sprint 49c: zero-or-more repetition ──────────────────────────────
+
+    /// Parse a single-rule `cond` macro that uses `{ (?t) (?b) } ...`
+    /// repetition, then match + substitute a call site of `n` clauses
+    /// (plus `otherwise`) and return the normalised expansion text.
+    fn expand_cond(call: &str) -> Option<String> {
+        let macro_src = "\
+define macro cond
+  { cond { ?test:expression ?body:expression } ... otherwise ?default:expression end }
+    => { if (#f) #f { elseif (?test) ?body } ... else ?default end }
+end macro;
+";
+        let mut sm = SourceMap::new();
+        let id = sm.add("<m>", macro_src.to_string()).unwrap();
+        let toks = lex(macro_src, id);
+        let pre = scan_preamble(macro_src);
+        let m = parse_module(macro_src, &toks, pre.as_ref()).expect("parse macro");
+        let Item::DefineMacro { name, body_fragments, span } = &m.items[0] else {
+            panic!("expected DefineMacro");
+        };
+        let def = parse_macro_def(name, body_fragments, *span, &sm).expect("parse_macro_def");
+        assert_eq!(def.rules.len(), 1, "cond should be ONE rule now");
+
+        // Build call-site fragments from `call`.
+        let mut csm = SourceMap::new();
+        let cid = csm.add("<c>", call.to_string()).unwrap();
+        let ctoks = lex(call, cid);
+        let cfrags = build_fragments(&ctoks).expect("call fragments");
+
+        let bindings = match_pattern_with_source(&def.rules[0].pattern, &cfrags, call)?;
+        let pv = collect_pattern_var_names(&def.rules[0].pattern);
+        let binders = collect_template_binders(&def.rules[0].template);
+        let out = substitute(
+            &def.rules[0].template,
+            &bindings,
+            7,
+            call,
+            &sm,
+            id,
+            &pv,
+        );
+        let _ = binders;
+        // Normalise whitespace for stable comparison.
+        Some(out.text.split_whitespace().collect::<Vec<_>>().join(" "))
+    }
+
+    #[test]
+    fn repetition_cond_one_clause() {
+        // Bare tokens for each test/body so the template paren wrap is
+        // visible 1:1 (no extra call-site parens to fold in).
+        let got = expand_cond("cond a 1 otherwise 9 end").expect("match");
+        assert_eq!(got, "if ( #f ) #f elseif ( a ) 1 else 9 end");
+    }
+
+    #[test]
+    fn repetition_cond_two_clauses() {
+        let got = expand_cond("cond a 1 b 2 otherwise 9 end").expect("match");
+        assert_eq!(
+            got,
+            "if ( #f ) #f elseif ( a ) 1 elseif ( b ) 2 else 9 end"
+        );
+    }
+
+    #[test]
+    fn repetition_cond_five_clauses() {
+        // The arity the old 4-rule cap could NOT do.
+        let got = expand_cond("cond a 1 b 2 c 3 d 4 e 5 otherwise 9 end").expect("match");
+        assert_eq!(
+            got,
+            "if ( #f ) #f elseif ( a ) 1 elseif ( b ) 2 elseif ( c ) 3 \
+             elseif ( d ) 4 elseif ( e ) 5 else 9 end"
+        );
+    }
+
+    #[test]
+    fn repetition_cond_zero_clauses() {
+        // Zero repetitions: just `otherwise`. Splice emits nothing extra.
+        // (The leading `?test`/`?body` are unbound here — empty `Repeated`
+        // — but this rule shape requires at least one clause to bind the
+        // FIRST `if (?test) ?body`; with zero clauses those are empty, so
+        // the engine still produces a syntactically-degenerate `if () …`.
+        // We only assert that matching SUCCEEDS with zero repetitions.)
+        let b = {
+            let macro_src = "\
+define macro rep0
+  { rep0 { ?x:expression } ... end }
+    => { begin { ?x } ... end }
+end macro;
+";
+            let mut sm = SourceMap::new();
+            let id = sm.add("<m>", macro_src.to_string()).unwrap();
+            let toks = lex(macro_src, id);
+            let pre = scan_preamble(macro_src);
+            let m = parse_module(macro_src, &toks, pre.as_ref()).unwrap();
+            let Item::DefineMacro { name, body_fragments, span } = &m.items[0] else {
+                panic!();
+            };
+            let def = parse_macro_def(name, body_fragments, *span, &sm).unwrap();
+            let call = "rep0 end";
+            let mut csm = SourceMap::new();
+            let cid = csm.add("<c>", call.to_string()).unwrap();
+            let ctoks = lex(call, cid);
+            let cfrags = build_fragments(&ctoks).unwrap();
+            let bindings =
+                match_pattern_with_source(&def.rules[0].pattern, &cfrags, call).expect("zero match");
+            let pv = collect_pattern_var_names(&def.rules[0].pattern);
+            let out = substitute(&def.rules[0].template, &bindings, 1, call, &sm, id, &pv);
+            out.text.split_whitespace().collect::<Vec<_>>().join(" ")
+        };
+        assert_eq!(b, "begin end");
+    }
+
+    #[test]
+    fn repetition_semicolon_separated() {
+        // `;`-separated repetition with a separator splice in the template.
+        let macro_src = "\
+define macro seqmac
+  { seqmac { ?e:expression } ; ... end }
+    => { list ( { ?e } , ... ) }
+end macro;
+";
+        let mut sm = SourceMap::new();
+        let id = sm.add("<m>", macro_src.to_string()).unwrap();
+        let toks = lex(macro_src, id);
+        let pre = scan_preamble(macro_src);
+        let m = parse_module(macro_src, &toks, pre.as_ref()).unwrap();
+        let Item::DefineMacro { name, body_fragments, span } = &m.items[0] else {
+            panic!();
+        };
+        let def = parse_macro_def(name, body_fragments, *span, &sm).unwrap();
+        // Pattern element 1 must be a Repetition with `;` separator.
+        assert!(matches!(
+            &def.rules[0].pattern[1],
+            PatternElem::Repetition { separator: Some((TokenKind::Semicolon, _)), .. }
+        ));
+        let call = "seqmac 1 ; 2 ; 3 end";
+        let mut csm = SourceMap::new();
+        let cid = csm.add("<c>", call.to_string()).unwrap();
+        let ctoks = lex(call, cid);
+        let cfrags = build_fragments(&ctoks).unwrap();
+        let bindings =
+            match_pattern_with_source(&def.rules[0].pattern, &cfrags, call).expect("match");
+        let pv = collect_pattern_var_names(&def.rules[0].pattern);
+        let out = substitute(&def.rules[0].template, &bindings, 1, call, &sm, id, &pv);
+        let norm = out.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(norm, "list ( 1 , 2 , 3 )");
+    }
 }
+
+

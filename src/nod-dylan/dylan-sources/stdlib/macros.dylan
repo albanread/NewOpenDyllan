@@ -80,38 +80,24 @@ end macro;
 // **Shape constraint.** Each test and body is a single
 // `:expression` fragment, which means one token, identifier, literal,
 // or grouped form (parens / brackets / braces). Multi-token bodies
-// MUST be wrapped: `(foo(x) + 1)` not `foo(x) + 1`. The paren tax
-// is the price of admission until the macro engine grows `*`
-// repetition (Sprint 49c-ish) — at that point the wrapping can be
-// dropped per clause and N-arm support stops being arity-bounded.
+// MUST be wrapped: `(foo(x) + 1)` not `foo(x) + 1`.
 //
-// **Arity cap.** This rule set supports 1 through 4 test/body pairs
-// + `otherwise`. Beyond 4 arms, nest a second `cond` inside the
-// `otherwise` clause. The cap is purely the number of fixed rules
-// written below — extend by appending more rules in lockstep.
+// **No arity cap (Sprint 49c).** The macro engine now supports
+// zero-or-more repetition: a brace group immediately followed by `...`
+// matches a SEQUENCE of clauses, and the matching `{ … } ...` splice in
+// the template re-emits one expansion per clause. So a SINGLE rule
+// handles 1, 2, 3, … N clauses. The `{ ?test:expression
+// ?body:expression } ...` unit captures every `(test) (body)` pair; the
+// template's `{ elseif (?test) ?body } ...` splices an `elseif` arm for
+// each. The leading `if (#f) #f` is a never-firing sentinel so the
+// chain is a uniform `elseif*` (it keeps every captured clause inside
+// the repetition splice — no special-cased first clause — and the dead
+// arm is folded away by lowering). Behaviour is identical to the old
+// 4-rule chain; the only change is the cap is gone.
 
 define macro cond
-  // 1 test/body pair + otherwise.
-  { cond ?t1:expression ?b1:expression otherwise ?d:expression end }
-    => { if (?t1) ?b1 else ?d end }
-  // 2 pairs + otherwise.
-  { cond ?t1:expression ?b1:expression
-         ?t2:expression ?b2:expression
-         otherwise ?d:expression end }
-    => { if (?t1) ?b1 elseif (?t2) ?b2 else ?d end }
-  // 3 pairs + otherwise.
-  { cond ?t1:expression ?b1:expression
-         ?t2:expression ?b2:expression
-         ?t3:expression ?b3:expression
-         otherwise ?d:expression end }
-    => { if (?t1) ?b1 elseif (?t2) ?b2 elseif (?t3) ?b3 else ?d end }
-  // 4 pairs + otherwise.
-  { cond ?t1:expression ?b1:expression
-         ?t2:expression ?b2:expression
-         ?t3:expression ?b3:expression
-         ?t4:expression ?b4:expression
-         otherwise ?d:expression end }
-    => { if (?t1) ?b1 elseif (?t2) ?b2 elseif (?t3) ?b3 elseif (?t4) ?b4 else ?d end }
+  { cond { ?test:expression ?body:expression } ... otherwise ?default:expression end }
+    => { if (#f) #f { elseif (?test) ?body } ... else ?default end }
 end macro;
 
 // ─── with-cleanup macro ────────────────────────────────────────────────────
