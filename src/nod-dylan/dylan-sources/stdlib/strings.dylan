@@ -261,44 +261,73 @@ define function ascii-whitespace? (b :: <integer>) => (yes? :: <boolean>)
   (b = 32) | (b = 9) | (b = 10) | (b = 13) | (b = 12)
 end function;
 
-// ─── DRM byte-code predicate aliases ──────────────────────────────────────
+// ─── DRM <character> predicates ────────────────────────────────────────────
 //
-// The DRM/common-dylan names (`whitespace?`, `alphabetic?`, `digit?`, …) are
-// defined on `<character>`. We don't yet have a primitive to extract a
-// fixnum code-point from a `<character>` value (a char literal lowers to a
-// raw i32, not a tagged fixnum — see report, "blocked on missing primitive
-// char->code"), so the `<character>` overloads can't be written in pure
-// Dylan today. What we CAN offer is the same predicate spelled over an
-// <integer> byte code, which is exactly what byte-string element reads give
-// you (`element(s, i)` → a 0..255 fixnum). These thin aliases delegate to
-// the `ascii-*` workhorses above so hand-rolled scanners over byte-strings
-// can use the familiar DRM names. (`define function` ⇒ single `<object>`
-// method, so a bare `whitespace?` is also a usable first-class value for
-// `choose`/`any?`/`find-key`.)
+// The DRM/common-dylan names (`whitespace?`, `alphabetic?`, `digit?`, …)
+// classify a `<character>`. A char lowers to a raw i32 code; the
+// `%char-code` primitive bridges it to a first-class fixnum `<integer>`,
+// so each predicate just extracts the code and delegates to the
+// corresponding `ascii-*` byte-code workhorse defined above. We do NOT
+// repeat the range arithmetic here — these are thin char→code adapters,
+// the `ascii-*` forms remain the integer byte-code predicates for
+// hand-rolled byte-string scanners (`element(s, i)` → tagged fixnum).
+//
+// Dispatch note: a `<character>` value can't be classified at runtime
+// (its i32 code isn't a tagged Word, so `word_class_id` would
+// mis-tag it), so these are `define function`s with a `<character>`
+// specialiser — resolved by static type, called directly. That also
+// keeps each a usable first-class value for `choose` / `any?`.
 
-define function whitespace? (b) => (yes?)
-  ascii-whitespace?(b)
+define function whitespace? (ch :: <character>) => (yes? :: <boolean>)
+  ascii-whitespace?(%char-code(ch))
 end function;
 
-define function alphabetic? (b) => (yes?)
-  ascii-alpha?(b)
+define function alphabetic? (ch :: <character>) => (yes? :: <boolean>)
+  ascii-alpha?(%char-code(ch))
 end function;
 
-define function digit? (b) => (yes?)
-  ascii-digit?(b)
+define function digit? (ch :: <character>) => (yes? :: <boolean>)
+  ascii-digit?(%char-code(ch))
 end function;
 
-define function alphanumeric? (b) => (yes?)
-  ascii-alphanumeric?(b)
+define function alphanumeric? (ch :: <character>) => (yes? :: <boolean>)
+  ascii-alphanumeric?(%char-code(ch))
 end function;
 
-define function uppercase? (b) => (yes?)
-  ascii-uppercase?(b)
+define function uppercase? (ch :: <character>) => (yes? :: <boolean>)
+  ascii-uppercase?(%char-code(ch))
 end function;
 
-define function lowercase? (b) => (yes?)
-  ascii-lowercase?(b)
+define function lowercase? (ch :: <character>) => (yes? :: <boolean>)
+  ascii-lowercase?(%char-code(ch))
 end function;
+
+// ─── <character> case mapping + <character> ↔ <integer> coercion ───────────
+//
+// `as-uppercase` / `as-lowercase` gain `<character>` methods alongside the
+// `<byte-string>` methods above (same ASCII-only mapping, shifting between
+// 'a'..'z' / 'A'..'Z'). Both build on `%char-code` / `%code-char`. The
+// `as(<integer>, ch)` / `as(<character>, code)` coercions are handled as a
+// compile-time intrinsic in the lowering pass (runtime dispatch can't
+// classify a raw-i32 char), straight to the same two primitives.
+
+define method as-uppercase (ch :: <character>) => (out :: <character>)
+  let c = %char-code(ch);
+  if ((c >= 97) & (c <= 122))      // 'a'..'z'
+    %code-char(c - 32)             // shift to 'A'..'Z'
+  else
+    ch
+  end
+end method;
+
+define method as-lowercase (ch :: <character>) => (out :: <character>)
+  let c = %char-code(ch);
+  if ((c >= 65) & (c <= 90))       // 'A'..'Z'
+    %code-char(c + 32)             // shift to 'a'..'z'
+  else
+    ch
+  end
+end method;
 
 // ─── as-uppercase! / as-lowercase! — in-place ASCII case mapping ───────────
 //

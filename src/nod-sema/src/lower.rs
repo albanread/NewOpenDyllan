@@ -375,6 +375,16 @@ const LOWER_PRIMITIVE_TABLE: &[(&str, &str, usize, TypeEstimate)] = &[
     ("%byte-string-element", "nod_byte_string_element", 2, TypeEstimate::Integer),
     ("%byte-string-element-setter", "nod_byte_string_element_setter", 3, TypeEstimate::Integer),
     ("%byte-string-copy!", "nod_byte_string_copy_bytes", 5, TypeEstimate::Integer),
+    // `<character>` ↔ `<integer>` code-point conversion. A char lowers to
+    // a raw i32 code (not a tagged Word); these bridge it to/from a
+    // first-class fixnum `<integer>`. The codegen boundary sign-extends
+    // the i32 char arg to the i64 ABI for `%char-code` and truncates the
+    // i64 result back to i32 for `%code-char` (see `temp_val_as_word` /
+    // the char-conv path in nod-llvm). Together they let stdlib express
+    // `as(<integer>, ch)` / `as(<character>, code)` and route every char
+    // predicate through the existing `ascii-*` integer helpers.
+    ("%char-code", "nod_char_code", 1, TypeEstimate::Integer),
+    ("%code-char", "nod_code_char", 1, TypeEstimate::Character),
     // Sprint 55 — the Dylan-side lowering (shim) calls these to classify a
     // non-local callee as a generic (-> Dispatch) vs a plain function
     // (-> DirectCall), and a param type as a class (-> <class>) vs not.
@@ -6553,7 +6563,27 @@ impl FunctionBuilder {
                 // The integer / float fast paths below stay exactly as
                 // they were — this only diverts when neither operand has
                 // a known numeric estimate.
+                //
+                // `<character>` is carved out: a char lowers to a raw i32
+                // holding its code (not a tagged Word), so passing it to
+                // the i64-ABI `nod_object_equal_p` shim mis-types the call
+                // (i32 vs i64 verify error) AND the shim's raw-bit compare
+                // would read the i32 as a 64-bit pattern. Instead chars
+                // fall through to `select_binop`, which emits an inline
+                // `EqInt`/`NeInt` — both operands are same-width i32, so
+                // `build_int_compare` matches them directly. Char codes
+                // are unique per character, so bitwise `=` IS identity.
+                //
+                // Fires only when BOTH operands are `<character>`. A mixed
+                // `<character>` = `<integer>` comparison stays on the
+                // generic path (the i32 char is widened to i64 at the call
+                // boundary in codegen) so it returns a well-defined `#f`
+                // — a char is never `=` to an integer — instead of an
+                // illegal mismatched-width `EqInt`.
+                let char_cmp = matches!(lt, TypeEstimate::Character)
+                    && matches!(rt, TypeEstimate::Character);
                 if matches!(*op, BinOp::Eq | BinOp::EqEq | BinOp::Ne | BinOp::NeEq)
+                    && !char_cmp
                     && !lt.is_integer()
                     && !lt.is_float()
                     && !rt.is_integer()
@@ -7196,6 +7226,37 @@ impl FunctionBuilder {
             && args.len() == 2
         {
             return self.lower_instance_check(&args[0], &args[1], env, ctx, span);
+        }
+        // `as(<integer>, ch)` / `as(<character>, code)` intrinsic. A
+        // `<character>` lowers to a raw i32 code that runtime dispatch
+        // can't classify (its value isn't a tagged Word, so
+        // `word_class_id` would mis-tag / fault), so the DRM `as`
+        // coercion for these two immediate classes is resolved here at
+        // compile time straight to the `%char-code` / `%code-char`
+        // primitives. Any other `as(...)` target falls through to the
+        // ordinary generic path below.
+        if let Expr::Ident(_, name) = callee
+            && name == "as"
+            && args.len() == 2
+            && let Expr::Ident(_, class_name) = &args[0]
+        {
+            let prim = match class_name.as_str() {
+                "<integer>" => Some(("nod_char_code", TypeEstimate::Integer)),
+                "<character>" => Some(("nod_code_char", TypeEstimate::Character)),
+                _ => None,
+            };
+            if let Some((sym, ret_ty)) = prim {
+                let v = self.lower_expr(&args[1], env, ctx)?;
+                let dst = self.fresh_temp(ret_ty);
+                self.push(Computation::DirectCall {
+                    dst,
+                    callee: sym.to_string(),
+                    args: vec![v],
+                    safepoint_roots: Vec::new(),
+                    is_no_alloc: true,
+                });
+                return Ok(dst);
+            }
         }
         // `make(<class>, kw: v, ...)` intrinsic.
         if let Expr::Ident(_, name) = callee

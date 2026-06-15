@@ -340,6 +340,45 @@ pub unsafe extern "C-unwind" fn nod_integer_to_string(n_raw: u64) -> u64 {
     crate::with_literal_pool(|pool| pool.heap.alloc_byte_string(&s, &pool.classes)).raw()
 }
 
+/// `%char-code(ch :: <character>) -> <integer>` — the integer code
+/// point of a character.
+///
+/// `<character>` lowers to a raw i32 holding its code (see
+/// `nod-llvm::codegen` — `TypeEstimate::Character => i32`). The codegen
+/// boundary sign-extends that i32 to the i64 Word ABI before the call,
+/// so `ch_raw`'s low 32 bits are the code. We mask to 32 bits (a char
+/// code is non-negative) and retag as a Dylan fixnum so the result is a
+/// first-class `<integer>` that compares/arithmetics against byte codes.
+///
+/// # Safety
+/// `ch_raw` is the sign-extended i32 char code in an i64 register.
+#[unsafe(no_mangle)]
+pub extern "C-unwind" fn nod_char_code(ch_raw: u64) -> u64 {
+    // Low 32 bits are the code; char codes are non-negative so a plain
+    // mask drops any sign-extension high bits.
+    let code = (ch_raw & 0xFFFF_FFFF) as i64;
+    Word::from_fixnum(code).expect("char code fits fixnum").raw()
+}
+
+/// `%code-char(code :: <integer>) -> <character>` — the character with
+/// the given integer code point.
+///
+/// `code_raw` is a fixnum-tagged `<integer>` Word. We untag to recover
+/// the raw code and return it in the low 32 bits of the result Word;
+/// the codegen boundary truncates that to the i32 `<character>` register
+/// shape. Out-of-range codes are masked to 32 bits (Dylan has no
+/// `<character>` bounds class yet — see DEFERRED). This is the exact
+/// inverse of `nod_char_code`.
+///
+/// # Safety
+/// `code_raw` is a fixnum-tagged Dylan Word.
+#[unsafe(no_mangle)]
+pub extern "C-unwind" fn nod_code_char(code_raw: u64) -> u64 {
+    let code = Word::from_raw(code_raw).as_fixnum().unwrap_or(0);
+    // Return the raw code in the low 32 bits; codegen trunc's to i32.
+    (code as u64) & 0xFFFF_FFFF
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,5 +424,44 @@ mod tests {
         assert_eq!(bs.len as usize, s.len());
         // SAFETY: same as above.
         assert_eq!(unsafe { bs.as_str() }, Some(s));
+    }
+
+    // `<character>` ↔ `<integer>` code-point conversion primitives.
+    // `nod_char_code` takes a sign-extended i32 char code in an i64
+    // register and returns a tagged fixnum; `nod_code_char` is its
+    // inverse, returning the raw code in the low 32 bits.
+
+    #[test]
+    fn char_code_returns_tagged_fixnum() {
+        // 'A' = 65; codegen sign-extends the i32 65 to i64 65.
+        let code = nod_char_code(65);
+        assert_eq!(Word::from_raw(code).as_fixnum(), Some(65));
+        // Even-coded char (bit 0 = 0) and odd-coded char (bit 0 = 1)
+        // both round-trip to a proper fixnum, not a stray pointer.
+        assert_eq!(Word::from_raw(nod_char_code(66)).as_fixnum(), Some(66));
+        assert_eq!(Word::from_raw(nod_char_code(53)).as_fixnum(), Some(53)); // '5'
+    }
+
+    #[test]
+    fn code_char_recovers_raw_code() {
+        // Input is a tagged fixnum 66; output is the raw code in low 32.
+        let tagged_66 = Word::from_fixnum(66).unwrap().raw();
+        assert_eq!(nod_code_char(tagged_66) & 0xFFFF_FFFF, 66);
+        let tagged_53 = Word::from_fixnum(53).unwrap().raw();
+        assert_eq!(nod_code_char(tagged_53) & 0xFFFF_FFFF, 53);
+    }
+
+    #[test]
+    fn char_code_round_trip_is_identity() {
+        // %char-code(%code-char(code)) == code for the full ASCII range.
+        for code in 0..=127i64 {
+            let tagged = Word::from_fixnum(code).unwrap().raw();
+            // `nod_code_char` yields the raw code (what an i32 char holds);
+            // a real call would trunc to i32 then sign-extend back — for
+            // 0..127 that's a no-op, so feed it straight to `nod_char_code`.
+            let raw_char = nod_code_char(tagged);
+            let back = nod_char_code(raw_char);
+            assert_eq!(Word::from_raw(back).as_fixnum(), Some(code));
+        }
     }
 }
