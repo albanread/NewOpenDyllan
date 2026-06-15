@@ -212,13 +212,14 @@ end function;
 //
 // DRM `always(object) => constant-function`. Returns a function that ignores
 // its arguments and always returns the captured `object`. The DRM result
-// accepts any number of arguments; the one-argument form shipped here returns
-// `method (ignore) value end`, which is the shape `map` / `find-key` / default
-// callbacks reach for (a constant transform over one element). (The argument-
-// agnostic 0-/N-arg form needs `#rest` collection — deferred.)
+// accepts ANY number of arguments: `always(1)()`, `always(1)(99)`, and
+// `always(1)(99, 98)` all return `1`. The returned `method (#rest ignore) …`
+// is a lifted/escaping closure tagged FUNCTION_KIND_CLOSURE_REST, so the
+// runtime collects the trailing actuals into a `#rest` SOV (discarded here)
+// at every call shape.
 
 define function always (value) => (constant-function)
-  method (ignore) value end
+  method (#rest ignore) value end
 end function;
 
 // ─── disjoin / conjoin ──────────────────────────────────────────────────────────

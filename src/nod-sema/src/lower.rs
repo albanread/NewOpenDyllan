@@ -4742,10 +4742,19 @@ fn lower_function_inner_keyed(
     // synthetic FIRST parameter (matching the runtime ABI in
     // `nod_funcall_N`). The lowerer redirects reads / writes of
     // captured names through `%env-cell` + `%cell-get` / `%cell-set!`.
+    //
+    // Sprint 60+: a `#rest` closure body is ALWAYS created via
+    // emit_make_closure (even with no captures) so the closure Word is
+    // tagged FUNCTION_KIND_CLOSURE_REST. emit_make_closure builds an
+    // <environment> (empty when there are no captures), so the runtime
+    // invokes the body with the `(env, …)` ABI. The body must therefore
+    // carry the synthetic env param whenever it is a rest-closure body,
+    // even with an empty capture set — otherwise the env Word would be
+    // misread as the first fixed argument.
     let closure_info: Option<&ClosureInfo> = ctx
         .closures
         .and_then(|reg| reg.closure_for(name))
-        .filter(|info| !info.captured.is_empty());
+        .filter(|info| !info.captured.is_empty() || info.rest_fixed.is_some());
     if let Some(info) = closure_info {
         let env_temp = b.fresh_temp(TypeEstimate::Top);
         b.func.params.push(env_temp);
@@ -5312,6 +5321,15 @@ pub struct ClosureInfo {
     /// vector is the cell's slot index in the environment.
     pub captured: Vec<String>,
     pub arity: usize,
+    /// Sprint 60+: if the lifted method declares a `#rest` parameter,
+    /// `Some(F)` where `F` is the count of fixed params BEFORE `#rest`
+    /// (i.e. `rest_param_index(params)`). `None` for a fixed-arity
+    /// method. When set, the closure-creation site emits the
+    /// `nod_make_rest_closure` maker (kind-tag = FUNCTION_KIND_CLOSURE_REST)
+    /// so the runtime collects trailing actuals into the `#rest` SOV.
+    /// `arity` still holds `params.len()` = `F + 1` (the body's
+    /// value-arity), the same value the body is registered under.
+    pub rest_fixed: Option<usize>,
     pub span: Span,
 }
 
@@ -5604,6 +5622,7 @@ fn lift_statement(
                         lifted_name: lifted_name.clone(),
                         captured,
                         arity: m.params.len(),
+                        rest_fixed: rest_param_index(&m.params),
                         span: m.span,
                     },
                 );
@@ -5796,6 +5815,7 @@ fn lift_expr(
                     lifted_name: lifted_name.clone(),
                     captured: captured.clone(),
                     arity: params.len(),
+                    rest_fixed: rest_param_index(params),
                     span: *span,
                 },
             );
@@ -6535,9 +6555,16 @@ impl FunctionBuilder {
                 // cell-Word lives in the current `LocalEnv` as the
                 // result of cell-promotion at its `let` (or param)
                 // binding site.
+                // A rest-closure ALSO takes this path even with NO captures:
+                // it must be tagged FUNCTION_KIND_CLOSURE_REST (via
+                // emit_make_closure / nod_make_rest_closure), not lowered to
+                // a plain function-ref (kind-tag=0), or the funcall shims
+                // would apply the exact-arity check and crash on a variadic
+                // call. With no captures `captured_cells` is empty and the
+                // env is an empty <environment>.
                 if let Some(reg) = ctx.closures
                     && let Some(info) = reg.closure_for(name)
-                    && !info.captured.is_empty()
+                    && (!info.captured.is_empty() || info.rest_fixed.is_some())
                 {
                     let mut captured_cells: Vec<TempId> = Vec::with_capacity(info.captured.len());
                     for cap in &info.captured {
@@ -6553,7 +6580,12 @@ impl FunctionBuilder {
                         };
                         captured_cells.push(cell_t);
                     }
-                    return Ok(self.emit_make_closure(name, info.arity, &captured_cells));
+                    return Ok(self.emit_make_closure(
+                        name,
+                        info.arity,
+                        &captured_cells,
+                        info.rest_fixed.is_some(),
+                    ));
                 }
                 // GAP-002 fix: a bareword reference to a `define
                 // constant` or `define variable` name should EVALUATE
@@ -6889,6 +6921,12 @@ impl FunctionBuilder {
         lifted_name: &str,
         arity: usize,
         captured_cells: &[TempId],
+        // Sprint 60+: when the lifted body declares `#rest`, emit the
+        // rest-marked maker (`nod_make_rest_closure`) so the runtime tags
+        // the closure with FUNCTION_KIND_CLOSURE_REST and collects
+        // trailing actuals into the `#rest` SOV at call time. `arity` is
+        // still the body value-arity `F + 1`.
+        rest: bool,
     ) -> TempId {
         // 1. Allocate the cells vector (len = captured.len()).
         let len_t = self.fresh_temp(TypeEstimate::Integer);
@@ -6928,9 +6966,14 @@ impl FunctionBuilder {
             value: ConstValue::Integer(arity as i128),
         });
         let dst = self.fresh_temp(TypeEstimate::Top);
+        let maker = if rest {
+            "nod_make_rest_closure"
+        } else {
+            "nod_make_closure"
+        };
         self.push(Computation::DirectCall {
             dst,
-            callee: "nod_make_closure".to_string(),
+            callee: maker.to_string(),
             args: vec![name_word, arity_t, env_t],
             safepoint_roots: Vec::new(), is_no_alloc: false,
         });
@@ -7017,13 +7060,24 @@ impl FunctionBuilder {
                 };
                 captured_cells.push(cell_t);
             }
-            let closure = if info.captured.is_empty() {
-                // No captures: a plain function reference suffices, but we
-                // still store it through the cell so call sites uniformly
-                // read NAME via %cell-get.
-                self.emit_make_function_ref(&info.lifted_name, info.arity)
+            let lifted_name = info.lifted_name.clone();
+            let info_arity = info.arity;
+            let is_rest = info.rest_fixed.is_some();
+            let no_captures = info.captured.is_empty();
+            let closure = if no_captures && !is_rest {
+                // No captures AND fixed arity: a plain function reference
+                // suffices, but we still store it through the cell so call
+                // sites uniformly read NAME via %cell-get.
+                self.emit_make_function_ref(&lifted_name, info_arity)
             } else {
-                self.emit_make_closure(&info.lifted_name, info.arity, &captured_cells)
+                // A rest-closure MUST go through emit_make_closure (even
+                // with no captures) so the closure Word is tagged
+                // FUNCTION_KIND_CLOSURE_REST — a plain function-ref would be
+                // kind-tag=0 and the funcall shims would apply the exact-
+                // arity check and crash on a variadic call. With no
+                // captures the env is an empty <environment>; env-ptr is
+                // non-zero, so the body's (env, …) ABI still holds.
+                self.emit_make_closure(&lifted_name, info_arity, &captured_cells, is_rest)
             };
             let cell_t = *env.get(&m.name).expect("cell created in pass 1");
             let set_dst = self.fresh_temp(TypeEstimate::Top);
@@ -7724,9 +7778,13 @@ impl FunctionBuilder {
                 // would drop the environment. Capture-free lifted
                 // methods and ordinary top-level / generic idents fall
                 // through to the existing DirectCall / Dispatch paths.
+                // A rest-closure must route through the funcall trampoline
+                // (and be created via emit_make_closure) even with no
+                // captures, so the variadic call hits invoke_rest_closure
+                // instead of a fixed-arity DirectCall.
                 ctx.closures
                     .and_then(|reg| reg.closure_for(name))
-                    .map(|info| !info.captured.is_empty())
+                    .map(|info| !info.captured.is_empty() || info.rest_fixed.is_some())
                     .unwrap_or(false)
             }
             // Any non-ident callee (after Paren-unwrapping) is a computed

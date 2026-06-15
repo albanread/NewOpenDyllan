@@ -48,6 +48,7 @@ use crate::codegen::{
     // Sprint 24 — closures.
     NOD_CELL_GET_SYMBOL, NOD_CELL_SET_SYMBOL, NOD_ENV_CELL_SYMBOL,
     NOD_MAKE_CELL_SYMBOL, NOD_MAKE_CLOSURE_SYMBOL, NOD_MAKE_ENVIRONMENT_SYMBOL,
+    NOD_MAKE_REST_CLOSURE_SYMBOL,
     // Sprint 28 — Win64 FFI trampolines.
     NOD_WINFFI_CALL_0_SYMBOL, NOD_WINFFI_CALL_1_SYMBOL, NOD_WINFFI_CALL_2_SYMBOL,
     NOD_WINFFI_CALL_3_SYMBOL, NOD_WINFFI_CALL_4_SYMBOL, NOD_WINFFI_CALL_5_SYMBOL,
@@ -477,6 +478,10 @@ impl<'ctx> Jit<'ctx> {
             (
                 module.get_function(NOD_MAKE_CLOSURE_SYMBOL),
                 nod_runtime::nod_make_closure as *const () as *mut std::ffi::c_void,
+            ),
+            (
+                module.get_function(NOD_MAKE_REST_CLOSURE_SYMBOL),
+                nod_runtime::nod_make_rest_closure as *const () as *mut std::ffi::c_void,
             ),
             // Sprint 28 — Win64 FFI trampolines.
             (
@@ -1484,6 +1489,7 @@ fn standard_extern_addresses() -> Vec<(&'static str, *mut std::ffi::c_void)> {
         (NOD_ENV_CELL_SYMBOL, nod_runtime::nod_env_cell as *const () as *mut std::ffi::c_void),
         (NOD_MAKE_ENVIRONMENT_SYMBOL, nod_runtime::nod_make_environment as *const () as *mut std::ffi::c_void),
         (NOD_MAKE_CLOSURE_SYMBOL, nod_runtime::nod_make_closure as *const () as *mut std::ffi::c_void),
+        (NOD_MAKE_REST_CLOSURE_SYMBOL, nod_runtime::nod_make_rest_closure as *const () as *mut std::ffi::c_void),
         (NOD_WINFFI_CALL_0_SYMBOL, nod_runtime::nod_winffi_call_0 as *const () as *mut std::ffi::c_void),
         (NOD_WINFFI_CALL_1_SYMBOL, nod_runtime::nod_winffi_call_1 as *const () as *mut std::ffi::c_void),
         (NOD_WINFFI_CALL_2_SYMBOL, nod_runtime::nod_winffi_call_2 as *const () as *mut std::ffi::c_void),

@@ -287,6 +287,7 @@ pub const NOD_CELL_SET_SYMBOL: &str = "nod_cell_set";
 pub const NOD_ENV_CELL_SYMBOL: &str = "nod_env_cell";
 pub const NOD_MAKE_ENVIRONMENT_SYMBOL: &str = "nod_make_environment";
 pub const NOD_MAKE_CLOSURE_SYMBOL: &str = "nod_make_closure";
+pub const NOD_MAKE_REST_CLOSURE_SYMBOL: &str = "nod_make_rest_closure";
 
 // ─── GAP-004 — `define variable` getter/setter shims by name ──────────────
 pub const NOD_VAR_GET_BY_NAME_SYMBOL: &str = "nod_var_get_by_name";
@@ -526,6 +527,7 @@ const SPRINT_20B_PRIMITIVES: &[(&str, &str, usize)] = &[
     ("nod_env_cell", NOD_ENV_CELL_SYMBOL, 2),
     ("nod_make_environment", NOD_MAKE_ENVIRONMENT_SYMBOL, 1),
     ("nod_make_closure", NOD_MAKE_CLOSURE_SYMBOL, 3),
+    ("nod_make_rest_closure", NOD_MAKE_REST_CLOSURE_SYMBOL, 3),
     // Sprint 47 — multi-value return secondary-values buffer (GAP-003).
     ("nod_values_clear", NOD_VALUES_CLEAR_SYMBOL, 0),
     ("nod_values_set", NOD_VALUES_SET_SYMBOL, 2),

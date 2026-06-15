@@ -224,14 +224,16 @@ pub use format_out::{
     install_test_writer, nod_format_out, take_test_writer, uninstall_test_writer,
 };
 pub use functions::{
-    FUNCTION_KIND_CLOSURE, FUNCTION_KIND_GENERIC_TRAMPOLINE, FUNCTION_KIND_LIFTED_ANON,
-    FUNCTION_KIND_TOP_LEVEL, MAX_APPLY_ARITY, _reset_function_registry_for_tests,
+    FUNCTION_KIND_CLOSURE, FUNCTION_KIND_CLOSURE_REST, FUNCTION_KIND_GENERIC_TRAMPOLINE,
+    FUNCTION_KIND_LIFTED_ANON, FUNCTION_KIND_TOP_LEVEL, MAX_APPLY_ARITY,
+    _reset_function_registry_for_tests,
     ensure_operator_shims_registered, ensure_registered as ensure_functions_registered,
     function_arity, function_class_id, function_code_ptr, function_env_ptr, function_kind_tag,
     function_name, is_function, lookup_function_code, make_function, make_function_ref,
     make_generic_trampoline_ref, make_wrong_number_of_arguments_error, nod_apply, nod_funcall0,
     nod_funcall1, nod_funcall2, nod_funcall3, nod_funcall4, nod_funcall5, nod_instance_p,
-    nod_make_closure, nod_make_function_ref, nod_op_eq, nod_op_eq_eq, nod_op_gt, nod_op_lt,
+    nod_make_closure, nod_make_function_ref, nod_make_rest_closure, nod_op_eq, nod_op_eq_eq,
+    nod_op_gt, nod_op_lt,
     nod_op_minus, nod_op_ne, nod_op_ne_eq, nod_op_plus, nod_op_times, register_jit_function,
     register_rust_function, wrong_number_of_arguments_error_class_id,
 };

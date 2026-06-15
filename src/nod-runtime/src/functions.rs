@@ -95,6 +95,17 @@ pub const FUNCTION_KIND_CLOSURE: u32 = 2;
 /// the winner. Lets `\generic-name` route to the right method body at
 /// call time instead of baking one specific method's address in.
 pub const FUNCTION_KIND_GENERIC_TRAMPOLINE: u32 = 3;
+/// Sprint 60+: a lifted/escaping closure whose body declares a `#rest`
+/// parameter. The `arity` slot holds `F + 1` (the body's value-arity =
+/// the count of fixed params before `#rest`, plus one slot for the
+/// `#rest` SOV). `F` is recovered at call time as `arity_slot - 1`. The
+/// `nod_funcall_N` / `nod_apply` shims detect this kind-tag (next to the
+/// generic-trampoline check, BEFORE the exact-arity check) and route to
+/// `invoke_rest_closure`, which collects the trailing actuals into a
+/// freshly-allocated `<simple-object-vector>` and calls the body with
+/// `(env?, fixed0..fixed_{F-1}, rest_sov)`. `env-ptr` carries the
+/// closure's `<environment>` (or `0` for a no-capture rest-closure).
+pub const FUNCTION_KIND_CLOSURE_REST: u32 = 4;
 
 struct FunctionClassIds {
     function: ClassId,
@@ -407,6 +418,201 @@ fn code_ptr_or_panic(f: Word) -> *const u8 {
     })
 }
 
+/// Transmute `code` to the right `extern "C-unwind"` signature for `n`
+/// positional args (plus an optional leading `env` arg) and call it.
+///
+/// This is the shared dispatch table that both `nod_apply` and
+/// `invoke_rest_closure` use to land a call on a JIT/AOT body. The
+/// closure ABI threads `env` as the synthetic first argument; for a
+/// closure-with-env body of value-arity `n`, the native function takes
+/// `n + 1` `u64` parameters.
+///
+/// `args` MUST have length `>= n`; only the first `n` are passed.
+///
+/// # Safety
+///
+/// `code` must point at an `extern "C-unwind"` function whose runtime
+/// ABI matches `n` (no env) or `n + 1` (with env). `env_ptr == 0` selects
+/// the env-less branch. `n` must be `<= MAX_APPLY_ARITY` (env-less) or
+/// `<= MAX_APPLY_ARITY - 1` (with env). Each `args[i]` is a valid Word.
+unsafe fn dispatch_body_call(code: *const u8, env_ptr: u64, n: usize, args: &[u64]) -> u64 {
+    let a = args;
+    unsafe {
+        if env_ptr == 0 {
+            match n {
+                0 => (std::mem::transmute::<*const u8, Arity0Fn>(code))(),
+                1 => (std::mem::transmute::<*const u8, Arity1Fn>(code))(a[0]),
+                2 => (std::mem::transmute::<*const u8, Arity2Fn>(code))(a[0], a[1]),
+                3 => (std::mem::transmute::<*const u8, Arity3Fn>(code))(a[0], a[1], a[2]),
+                4 => (std::mem::transmute::<*const u8, Arity4Fn>(code))(a[0], a[1], a[2], a[3]),
+                5 => (std::mem::transmute::<*const u8, Arity5Fn>(code))(a[0], a[1], a[2], a[3], a[4]),
+                6 => (std::mem::transmute::<*const u8, Arity6Fn>(code))(
+                    a[0], a[1], a[2], a[3], a[4], a[5],
+                ),
+                7 => (std::mem::transmute::<*const u8, Arity7Fn>(code))(
+                    a[0], a[1], a[2], a[3], a[4], a[5], a[6],
+                ),
+                8 => (std::mem::transmute::<*const u8, Arity8Fn>(code))(
+                    a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7],
+                ),
+                _ => panic!(
+                    "dispatch_body_call: arity {n} exceeds cap {MAX_APPLY_ARITY}"
+                ),
+            }
+        } else {
+            // Closure body: env-ptr is the synthetic first arg.
+            match n {
+                0 => (std::mem::transmute::<*const u8, Arity1Fn>(code))(env_ptr),
+                1 => (std::mem::transmute::<*const u8, Arity2Fn>(code))(env_ptr, a[0]),
+                2 => (std::mem::transmute::<*const u8, Arity3Fn>(code))(env_ptr, a[0], a[1]),
+                3 => (std::mem::transmute::<*const u8, Arity4Fn>(code))(env_ptr, a[0], a[1], a[2]),
+                4 => (std::mem::transmute::<*const u8, Arity5Fn>(code))(
+                    env_ptr, a[0], a[1], a[2], a[3],
+                ),
+                5 => (std::mem::transmute::<*const u8, Arity6Fn>(code))(
+                    env_ptr, a[0], a[1], a[2], a[3], a[4],
+                ),
+                6 => (std::mem::transmute::<*const u8, Arity7Fn>(code))(
+                    env_ptr, a[0], a[1], a[2], a[3], a[4], a[5],
+                ),
+                7 => (std::mem::transmute::<*const u8, Arity8Fn>(code))(
+                    env_ptr, a[0], a[1], a[2], a[3], a[4], a[5], a[6],
+                ),
+                _ => panic!(
+                    "dispatch_body_call: closure arity {n} exceeds cap {} (env adds 1 to the runtime ABI arity)",
+                    MAX_APPLY_ARITY - 1
+                ),
+            }
+        }
+    }
+}
+
+/// Sprint 60+: invoke a `#rest` closure `<function>` Word
+/// (`kind-tag == FUNCTION_KIND_CLOSURE_REST`) with a variable number of
+/// actual args.
+///
+/// The body's ABI is `(env?, fixed0..fixed_{F-1}, rest_sov)` where `F`
+/// is the fixed (pre-`#rest`) param count and `rest_sov` is a
+/// `<simple-object-vector>` holding the `N - F` trailing actuals. The
+/// arity slot of `f` holds `F + 1` (the body's value-arity), so
+/// `F = arity_slot - 1`.
+///
+/// ## GC rooting
+///
+/// The GC is moving: any raw `u64` pointer value held outside a
+/// registered root goes stale across an allocation. Before allocating
+/// the `rest_sov` we copy each actual into a stable stack slot and
+/// `RootGuard` it (the moving GC rewrites the slot on evacuation), and
+/// we root the `env` slot too. After the `nod_make_sov_len` allocation we
+/// re-read every value through its guard (`reload`) so we observe the
+/// post-GC addresses, and we pass those reloaded Words to the element
+/// setter and into the body-args buffer. The guards live until after the
+/// body call returns.
+///
+/// # Safety
+///
+/// `f` must be a pointer-tagged `<function>` Word with
+/// `kind-tag == FUNCTION_KIND_CLOSURE_REST`. Each `actual_args[i]` is a
+/// valid Dylan Word.
+unsafe fn invoke_rest_closure(f: Word, actual_args: &[u64]) -> u64 {
+    // 1. Recover F (fixed param count) and N (actual count).
+    let body_arity = function_arity(f).unwrap_or_else(|| {
+        panic!(
+            "invoke_rest_closure: argument is not a <function> Word (raw = {:#x})",
+            f.raw()
+        );
+    });
+    debug_assert!(body_arity >= 1, "rest-closure arity slot must be F+1 >= 1");
+    let fixed = body_arity.saturating_sub(1);
+    let n = actual_args.len();
+    if n < fixed {
+        // Too few actuals to fill the fixed params. Signal a
+        // wrong-number-of-arguments error: the minimum acceptable count
+        // is `fixed`, the caller passed `n`.
+        let cond = make_wrong_number_of_arguments_error(f, fixed, n);
+        // SAFETY: cond is a freshly-allocated condition Word; nod_signal
+        // diverges, so the return is never observed.
+        let _ = unsafe { crate::conditions::nod_signal(cond.raw()) };
+    }
+
+    // 2. The body call needs `F + 1` value-args (`fixed` fixed + 1 SOV).
+    //    Enforce the same cap nod_apply uses (an env body adds one more
+    //    native param, which `dispatch_body_call` re-checks).
+    if body_arity > MAX_APPLY_ARITY {
+        panic!(
+            "invoke_rest_closure: rest-closure body value-arity {body_arity} exceeds \
+             the {MAX_APPLY_ARITY}-arg cap (F={fixed} fixed params + 1 #rest SOV)"
+        );
+    }
+
+    // 3. Copy actuals into a stable stack array and ROOT each one BEFORE
+    //    any allocation, so the moving GC updates them in place.
+    let mut argbuf = [Word::from_raw(0); MAX_APPLY_ARITY];
+    for (i, &raw) in actual_args.iter().enumerate() {
+        argbuf[i] = Word::from_raw(raw);
+    }
+    let mut guards: Vec<crate::make::RootGuard> = Vec::with_capacity(n + 1);
+    for slot in argbuf.iter().take(n) {
+        guards.push(crate::make::RootGuard::new(slot));
+    }
+
+    // 4. Root the env (if any). A non-zero env-ptr is a pointer-tagged
+    //    <environment> Word that the GC may relocate. Keep a stable stack
+    //    slot for it and reload after the allocation below.
+    let env_raw0 = function_env_ptr(f).unwrap_or(0);
+    let env_slot = Word::from_raw(env_raw0);
+    let env_guard = if env_raw0 != 0 {
+        Some(crate::make::RootGuard::new(&env_slot))
+    } else {
+        None
+    };
+
+    // 5. Allocate the rest SOV holding the (N - F) trailing actuals.
+    //    GC MAY RUN HERE — every live Word we still need is rooted.
+    let rest_len = n - fixed;
+    let len_word = Word::from_fixnum(rest_len as i64).unwrap_or(Word::from_raw(0));
+    // SAFETY: len_word is a fixnum-tagged Word, as nod_make_sov_len requires.
+    let rest_sov_raw = unsafe { crate::nod_make_sov_len(len_word.raw()) };
+    let rest_sov = Word::from_raw(rest_sov_raw);
+    let _rest_guard = crate::make::RootGuard::new(&rest_sov);
+
+    // 6. Fill the rest SOV: element j gets the actual at index F + j.
+    //    Read each value back through its guard so we see the post-GC
+    //    address, and re-read the SOV through its guard too.
+    for j in 0..rest_len {
+        let elem = guards[fixed + j].reload();
+        let idx_word = Word::from_fixnum(j as i64).unwrap_or(Word::from_raw(0));
+        // SAFETY: rest_sov is a live <simple-object-vector>; j < rest_len.
+        unsafe {
+            crate::nod_sov_element_setter(elem.raw(), _rest_guard.reload().raw(), idx_word.raw());
+        }
+    }
+
+    // 7. Build body_args (length F + 1): fixed actuals followed by the
+    //    rest SOV. Re-read each through its guard for the post-GC address.
+    let mut body_args = [0u64; MAX_APPLY_ARITY];
+    for (i, g) in guards.iter().enumerate().take(fixed) {
+        body_args[i] = g.reload().raw();
+    }
+    body_args[fixed] = _rest_guard.reload().raw();
+
+    // 8. Dispatch on (F + 1) and env presence via the shared table.
+    let code = code_ptr_or_panic(f);
+    let env_ptr = match &env_guard {
+        Some(g) => g.reload().raw(),
+        None => 0,
+    };
+    // SAFETY: body_arity == fixed + 1 <= MAX_APPLY_ARITY; the body's
+    // native ABI is (env?, fixed.., rest_sov); each body_args[i] is a
+    // live (rooted) Word.
+    let result = unsafe { dispatch_body_call(code, env_ptr, body_arity, &body_args) };
+
+    // 9. Guards drop here (after the body call), unrooting the slots.
+    drop(guards);
+    drop(env_guard);
+    result
+}
+
 /// Internal: dispatch `f` as a generic-trampoline `<function>` Word.
 /// Reads the `env-ptr` slot (which carries a raw
 /// `*const crate::dispatch::GenericFunction` — see
@@ -482,6 +688,12 @@ unsafe fn dispatch_via_generic_trampoline(f: Word, args: &[u64]) -> u64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C-unwind" fn nod_funcall0(f_raw: u64) -> u64 {
     let f = Word::from_raw(f_raw);
+    if function_kind_tag(f) == Some(FUNCTION_KIND_CLOSURE_REST) {
+        // SAFETY: kind tag was verified. Route to the #rest collector
+        // BEFORE the exact-arity check — a rest-closure accepts a
+        // variable number of args (>= F).
+        return unsafe { invoke_rest_closure(f, &[]) };
+    }
     let _ = check_arity_or_signal(f, 0);
     if function_kind_tag(f) == Some(FUNCTION_KIND_GENERIC_TRAMPOLINE) {
         // SAFETY: kind tag was verified.
@@ -531,6 +743,10 @@ pub unsafe extern "C-unwind" fn nod_funcall1(f_raw: u64, a: u64) -> u64 {
         // diverges.
         return unsafe { crate::conditions::nod_invoke_exit(f_raw, a) };
     }
+    if function_kind_tag(f) == Some(FUNCTION_KIND_CLOSURE_REST) {
+        // SAFETY: kind tag was verified.
+        return unsafe { invoke_rest_closure(f, &[a]) };
+    }
     let _ = check_arity_or_signal(f, 1);
     if function_kind_tag(f) == Some(FUNCTION_KIND_GENERIC_TRAMPOLINE) {
         // SAFETY: kind tag was verified.
@@ -562,6 +778,10 @@ pub unsafe extern "C-unwind" fn nod_funcall1(f_raw: u64, a: u64) -> u64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C-unwind" fn nod_funcall2(f_raw: u64, a: u64, b: u64) -> u64 {
     let f = Word::from_raw(f_raw);
+    if function_kind_tag(f) == Some(FUNCTION_KIND_CLOSURE_REST) {
+        // SAFETY: kind tag was verified.
+        return unsafe { invoke_rest_closure(f, &[a, b]) };
+    }
     let _ = check_arity_or_signal(f, 2);
     if function_kind_tag(f) == Some(FUNCTION_KIND_GENERIC_TRAMPOLINE) {
         // SAFETY: kind tag was verified.
@@ -594,6 +814,10 @@ pub unsafe extern "C-unwind" fn nod_funcall2(f_raw: u64, a: u64, b: u64) -> u64 
 #[unsafe(no_mangle)]
 pub unsafe extern "C-unwind" fn nod_funcall3(f_raw: u64, a: u64, b: u64, c: u64) -> u64 {
     let f = Word::from_raw(f_raw);
+    if function_kind_tag(f) == Some(FUNCTION_KIND_CLOSURE_REST) {
+        // SAFETY: kind tag was verified.
+        return unsafe { invoke_rest_closure(f, &[a, b, c]) };
+    }
     let _ = check_arity_or_signal(f, 3);
     if function_kind_tag(f) == Some(FUNCTION_KIND_GENERIC_TRAMPOLINE) {
         // SAFETY: kind tag was verified.
@@ -621,6 +845,10 @@ pub unsafe extern "C-unwind" fn nod_funcall3(f_raw: u64, a: u64, b: u64, c: u64)
 #[unsafe(no_mangle)]
 pub unsafe extern "C-unwind" fn nod_funcall4(f_raw: u64, a: u64, b: u64, c: u64, d: u64) -> u64 {
     let f = Word::from_raw(f_raw);
+    if function_kind_tag(f) == Some(FUNCTION_KIND_CLOSURE_REST) {
+        // SAFETY: kind tag was verified.
+        return unsafe { invoke_rest_closure(f, &[a, b, c, d]) };
+    }
     let _ = check_arity_or_signal(f, 4);
     if function_kind_tag(f) == Some(FUNCTION_KIND_GENERIC_TRAMPOLINE) {
         // SAFETY: kind tag was verified.
@@ -655,6 +883,10 @@ pub unsafe extern "C-unwind" fn nod_funcall5(
     e: u64,
 ) -> u64 {
     let f = Word::from_raw(f_raw);
+    if function_kind_tag(f) == Some(FUNCTION_KIND_CLOSURE_REST) {
+        // SAFETY: kind tag was verified.
+        return unsafe { invoke_rest_closure(f, &[a, b, c, d, e]) };
+    }
     let _ = check_arity_or_signal(f, 5);
     if function_kind_tag(f) == Some(FUNCTION_KIND_GENERIC_TRAMPOLINE) {
         // SAFETY: kind tag was verified.
@@ -694,6 +926,28 @@ pub unsafe extern "C-unwind" fn nod_apply(f_raw: u64, args_raw: u64) -> u64 {
             );
         });
     let n = sov.len as usize;
+    // Sprint 60+: a `#rest` closure accepts a variable number of args
+    // (>= F). Detect it BEFORE the exact-arity check and route to the
+    // collector, which materialises the trailing actuals into a fresh
+    // SOV. The collector reads the args from `sov` itself rather than the
+    // padded `a[..]` buffer below, so it can handle counts that the
+    // padded buffer would have to cap.
+    if function_kind_tag(f) == Some(FUNCTION_KIND_CLOSURE_REST) {
+        if n > MAX_APPLY_ARITY {
+            panic!(
+                "nod_apply: rest-closure apply with {n} args exceeds the \
+                 {MAX_APPLY_ARITY}-arg cap"
+            );
+        }
+        // SAFETY: sov has at least `n` element slots.
+        let mut a = [0u64; MAX_APPLY_ARITY];
+        let slots = unsafe { sov.slots() };
+        for i in 0..n {
+            a[i] = slots[i].raw();
+        }
+        // SAFETY: kind tag was verified; each a[i] is a valid Word.
+        return unsafe { invoke_rest_closure(f, &a[..n]) };
+    }
     let arity = function_arity(f).unwrap_or_else(|| {
         panic!(
             "nod_apply: function is not a <function> Word (raw = {:#x})",
@@ -1095,6 +1349,46 @@ pub unsafe extern "C-unwind" fn nod_make_closure(
     arity_raw: u64,
     env_raw: u64,
 ) -> u64 {
+    // SAFETY: forwards the same preconditions to the shared maker.
+    unsafe { make_closure_impl(name_raw, arity_raw, env_raw, /*rest=*/ false) }
+}
+
+/// Sprint 60+: like `nod_make_closure`, but builds a `#rest` closure
+/// whose `kind-tag` slot is `FUNCTION_KIND_CLOSURE_REST`. The lowering
+/// pass emits this maker (instead of `nod_make_closure`) at the
+/// creation site of a lifted/escaping `method (… #rest r) … end`.
+///
+/// `arity` is the body's value-arity `F + 1` (the count of fixed params
+/// before `#rest`, plus one slot for the collected SOV) — the SAME value
+/// the body was registered under. The runtime recovers `F` as
+/// `arity - 1` when collecting trailing actuals in `invoke_rest_closure`.
+///
+/// # Safety
+///
+/// Same preconditions as `nod_make_closure`: `name_raw` is a pointer-
+/// tagged `<byte-string>` Word; `arity_raw` is a fixnum (`= F + 1`);
+/// `env_raw` is a pointer-tagged `<environment>` Word.
+#[unsafe(no_mangle)]
+pub unsafe extern "C-unwind" fn nod_make_rest_closure(
+    name_raw: u64,
+    arity_raw: u64,
+    env_raw: u64,
+) -> u64 {
+    // SAFETY: forwards the same preconditions to the shared maker.
+    unsafe { make_closure_impl(name_raw, arity_raw, env_raw, /*rest=*/ true) }
+}
+
+/// Shared body for `nod_make_closure` / `nod_make_rest_closure`. Builds a
+/// fresh closure `<function>` Word in the moveable heap with the supplied
+/// environment, picking the `kind-tag` (`FUNCTION_KIND_CLOSURE` vs
+/// `FUNCTION_KIND_CLOSURE_REST`) by the `rest` flag. In BOTH cases the
+/// `arity` slot stores the body's value-arity (`arity` argument verbatim)
+/// and the code is looked up under that same arity.
+///
+/// # Safety
+///
+/// See `nod_make_closure`.
+unsafe fn make_closure_impl(name_raw: u64, arity_raw: u64, env_raw: u64, rest: bool) -> u64 {
     let name_word = Word::from_raw(name_raw);
     let bs = unsafe { crate::try_byte_string(name_word, ClassId::BYTE_STRING) }
         .expect("nod_make_closure: name is not a <byte-string> Word");
@@ -1109,17 +1403,24 @@ pub unsafe extern "C-unwind" fn nod_make_closure(
     // triggers a minor GC that evacuates it.
     let env_word = Word::from_raw(env_raw);
     let _env_guard = crate::make::RootGuard::new(&env_word);
+    // Both kinds register/compile the body under its value-arity (F+1 for
+    // a #rest body), so look up the code under `arity` either way.
     let code = lookup_function_code(&name, arity).unwrap_or_else(|| {
         panic!(
             "nod_make_closure: no registered closure body `{name}` with arity {arity}"
         )
     });
+    let kind_tag = if rest {
+        FUNCTION_KIND_CLOSURE_REST
+    } else {
+        FUNCTION_KIND_CLOSURE
+    };
     // Allocate a fresh <function> in the moveable heap, parameterised
     // with this site's environment. Different from `make_function_ref`
     // which caches one Word per (name, arity) in the static area; a
     // closure must be a unique Word per creation site so the env-ptr
     // is per-instance.
-    let f = make_function(&name, arity, code, /*kind_tag=*/ 2, env_word.raw());
+    let f = make_function(&name, arity, code, kind_tag, _env_guard.reload().raw());
     f.raw()
 }
 
