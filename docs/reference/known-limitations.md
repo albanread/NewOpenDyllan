@@ -90,22 +90,38 @@ or a standing design trade-off are kept here.
      plain-cons corruption threshold from ~175k to ~520k nodes. (Same bug class as the
      `code_ptr`-stale crash fixed in `invoke_rest_closure`: any runtime fn that holds a
      pointer across its own allocation must root+reload it.)
-  2. **Cross-gen multi-chunk evacuation sever — OPEN.** Beyond ~520k nodes a major
-     collection / older-gen promotion still truncates by a fixed prefix. `acc` is
-     correctly rooted+updated (a module-`define variable` accumulator truncates too),
-     so it is NOT codegen/root staleness: the major's mark cannot follow the full chain
-     because a tail pointer INSIDE the old-gen list was left dangling by a prior
-     cross-gen chunked evacuation. In `evacuate_with_roots`'s chunked loop
-     (evac.rs ~786-834), `phase2_rewrite` walks only `dest_gen`, so a not-yet-copied
-     later-chunk source object's pointer into an EARLIER chunk's already-released source
-     page is never rewritten via the live forward marker before that page is reclaimed.
-     A correct fix exists (walk from_gen sources in phase2 / defer source release to
-     end-of-cycle) but the obvious form is O(pages²) per evac and/or breaks the
-     chunked dest budget (released sources replenish Free for dest); a careful,
-     budget-preserving fix is still needed.
-* **Scope**: (1) done (lists.rs, ~14 lines). (2) open, deep (newgc-core evacuator);
-  affects only extreme cases (>~520k live nodes built in a tight allocating loop). Pre-
-  existing on `origin/main`; the fixes above strictly improve correctness.
+  2. **Chunked-evacuator backward cross-chunk sever — FIXED (Cheney defer-release).**
+     Beyond ~520k nodes a multi-chunk major/promotion truncated by a fixed prefix. `acc`
+     is correctly rooted+updated (a module-`define variable` accumulator truncated too),
+     so NOT root/codegen staleness: the evacuator copied live objects in CHUNKS and
+     `phase3_reclaim` released+`zero_whole_page`d each chunk's source pages IMMEDIATELY,
+     destroying in-page forward markers; those freed pages were re-acquired as dest by
+     later chunks. A BACKWARD cross-chunk pointer (cons `cdr`: newer/high-addr →
+     older/low-addr; chunks processed low→high) into an already-released chunk could
+     never be rewritten — `maybe_rewrite` (evac.rs:487) bails on a `Free` target — so it
+     dangled, and a later mark reclaimed the orphaned prefix. A **side forwarding table
+     was rejected** (3-agent adversarial review): cell indices are global, so a
+     released-then-reacquired source page reuses addresses and a raw dangling backward
+     pointer can't be disambiguated (old vs new occupant) — no keying/epoch fixes a
+     reused raw address. **Fix (Cheney discipline):** the chunk loop now runs only
+     phase1-copy + phase2-rewrite per chunk; `phase3_reclaim` runs ONCE at end-of-cycle
+     over the whole `from_pages` set. Source pages (and their forward markers) live until
+     every chunk's rewrite is done, so no source address is reused mid-cycle and every
+     backward pointer is rewritable; `maybe_rewrite`'s `Free`-bail never fires on a live
+     source. Verified: plain 600k cons 119520→**600000**, 1M→**1000000**; new
+     newgc-core regression test `backward_chain_survives_multi_chunk_evac` (single-rooted
+     backward chain forced multi-chunk) fails-before / passes-after.
+* **Residual limit (by design, not corruption):** a correct copying collector needs
+  transient ~2× space (live source held while the copy is built), so for a same-gen
+  compaction whose live set exceeds ~half the reservation the evac raises the EXISTING
+  **loud** `GcStallError(MidEvacOOM)` instead of silently corrupting. `DEFAULT_OLD_BYTES`
+  was raised 12 MB → 48 MB (address space only — pages commit lazily, so committed RAM
+  still tracks the live set) so the common large workloads (≤~1M-node lists) grow and
+  succeed; a genuinely-too-big build (e.g. a 2M-node tight-loop list) loud-stalls. A 1×
+  in-place mark-compact for the old gen would remove the 2× requirement — future work.
+* **Scope**: both fixed (lists.rs ~14 lines; newgc-core evac.rs defer-release +
+  heap.rs reservation). Pre-existing on `origin/main`; strictly improves correctness
+  (silent truncation → correct, or loud stall when the heap truly can't fit a copy).
 
 ---
 

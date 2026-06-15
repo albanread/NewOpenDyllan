@@ -21,6 +21,42 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 
 *(newest first)*
 
+### 2026-06-15 — Iteration 27: core-GC chunked-evacuator corruption FIXED (Cheney defer-release)
+
+- **The deep residual from iter 26 is fixed.** A plain `acc := pair(i, acc)` loop over
+  600k nodes returned 119520 (silent heap truncation); now returns **600000**. Root
+  cause (deep-traced with the in-tree GC traces, no guessing): the chunked evacuator
+  released+zeroed each chunk's source pages IMMEDIATELY (`phase3_reclaim`), destroying
+  in-page forward markers, and re-used those pages as dest in later chunks. A BACKWARD
+  cross-chunk pointer (cons `cdr`: newer/high-addr → older/low-addr; chunks low→high)
+  into an already-released chunk couldn't be rewritten (`maybe_rewrite` bails on a
+  `Free` target, evac.rs:487) → dangled → a later mark reclaimed the orphaned prefix.
+  Roots/args were clean (`NOD_GC_TRACE` + `NOD_DIAG_ARG_ROOT_COVERAGE` confirmed) — it
+  was the evac phase3-release-vs-phase2-rewrite ordering, i.e. the interface *between
+  evac phases*, exactly as the maintainer predicted ("it's never the GC, it's our
+  interface to the GC").
+- **A side forwarding table was considered and REJECTED** by a 3-agent adversarial
+  review: cell indices are global, so a released-then-reacquired source page reuses
+  addresses and a raw dangling backward pointer can't be disambiguated — no key/epoch
+  fixes a reused raw address.
+- **Fix (Cheney discipline):** the chunk loop runs only phase1-copy + phase2-rewrite per
+  chunk; `phase3_reclaim` runs ONCE at end-of-cycle over the whole `from_pages` set.
+  Forward markers live until every rewrite is done; no source address is reused
+  mid-cycle; every backward pointer is rewritable. `DEFAULT_OLD_BYTES` 12→48 MB (address
+  space only, lazy commit) gives the pool room for the transient ~2× a copying collector
+  needs. New newgc-core regression test `backward_chain_survives_multi_chunk_evac`
+  fails-before (link 4096 dangles into a `Free` page) / passes-after.
+- **Residual is now a loud stall, not corruption:** a same-gen compaction whose live set
+  exceeds ~half the reservation raises the existing `GcStallError(MidEvacOOM)` (e.g. a
+  2M-node tight-loop list) instead of silently truncating. A 1× mark-compact would lift
+  that — future work.
+- **Independently verified on a clean merge:** R1 600k→600000, curry+200k→200000,
+  1M→1000000, 2M→loud-stall; newgc-core full suite + regression test pass; nod-sema
+  48/0; nod-runtime full-suite flakes (range_reduce_sum / stretchy_vector_push /
+  bit_vector_fill — pre-existing, pass in isolation); in-tree 55/55 both paths;
+  smoke-aot 6/6; eval=2; rest-closure GC stress (`always` variadic + heavy consing)
+  bad=0; corpus 74/161 (no regression).
+
 ### 2026-06-15 — Iteration 26: `#rest` on lifted closures (DRM `always`) + a GC pointer-staleness fix uncovered along the way
 
 - **Lifted-closure `#rest`** (variadic escaping closures): `method (#rest r) … end`
