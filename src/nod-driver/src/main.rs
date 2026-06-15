@@ -606,7 +606,14 @@ fn main() -> ExitCode {
     // Sprint 51e.6 — the Dylan parser is now the DEFAULT real-pipeline
     // parser; `--parse-with-rust` (or NOD_PARSE_WITH_RUST=1) opts back out.
     let want_parse_with_rust = cli.parse_with_rust
-        || std::env::var("NOD_PARSE_WITH_RUST").map(|v| v == "1").unwrap_or(false);
+        || std::env::var("NOD_PARSE_WITH_RUST").map(|v| v == "1").unwrap_or(false)
+        // `eval` is a debug/REPL command: always route it through the reference
+        // Rust parser. The Dylan-parser shim mis-translates eval's synthetic
+        // `define function <eval-entry> () … end` wrapper (the angle-bracket
+        // name), dropping the entry so eval fails with "<eval-entry> missing
+        // after lowering". The Rust parser handles it, and eval never needs the
+        // self-hosting default path. (Fixes a regression from a shim rebuild.)
+        || matches!(cli.command, Some(Command::Eval { .. }));
 
     // Sprint 51e.5 — `--parse-with-dylan` deliberately does NOT install
     // the Rust-side lex OVERRIDE. The Dylan parse path lexes internally

@@ -41,11 +41,16 @@ A 3-agent workflow (one worktree per category), each build+run-verified by me on
   `union` size 5, `copy-sequence`/`key-sequence` correct (build+run); in-tree 55/55
   both paths (shim re-baked for the new file), smoke-aot 6/6, corpus 60/161 unchanged
   (stdlib additions add availability; corpus files fail on other downstream gaps).
-- **Discovered (separate, pre-existing):** `eval '<expr>'` returns `<eval-entry>
-  missing after lowering` — verified broken at the 9a25d96 baseline too (NOT caused
-  by this extension); a regression earlier in the session (macros/collection-classes
-  compiler-code era). The production path (`build` → exe, `dump-dfm`) is unaffected.
-  Being investigated next.
+- **Found + FIXED a separate pre-existing regression:** the CLI `eval` command
+  returned `<eval-entry> missing after lowering`. Root cause: the Dylan-parser shim
+  (default path, rebuilt during the collection-classes work) mis-translates eval's
+  synthetic `define function <eval-entry> () … end` wrapper, dropping the entry; the
+  Rust reference parser handles it (`--parse-with-rust eval` always worked, as did
+  the in-process library `eval` used by unit tests — the shim override is a
+  driver-only feature). Fix: CLI `eval` now implies the Rust parser
+  (`main.rs` `want_parse_with_rust`). `eval '1 + 1'` = 2 again; the shim default path
+  is unchanged for `dump-dfm`/`build` (in-tree 55/55 both paths). The underlying
+  shim mis-translation of `<…>`-named function definitions is logged as a follow-up.
 
 ### 2026-06-15 — Iteration 15: stdlib strings + select/case + collection classes (3 parallel agents)
 
