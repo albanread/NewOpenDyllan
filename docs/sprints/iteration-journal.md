@@ -12,7 +12,7 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 60 / 161 | … → 58 (`for`) → 59 (func-refs) → 60 (select/case) |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 63 / 161 | … → 60 (select/case) → 63 (DRM system classes) |
 | OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
@@ -20,6 +20,31 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 ## Iterations
 
 *(newest first)*
+
+### 2026-06-15 — Iteration 19: deeper macros + DRM system classes + funcall fix (3 agents)
+
+- **Macros (+5):** `iterate` (named-let loop, variadic via `*` repetition),
+  `when-let`/`if-let`, `collecting`/`collect` (ordered accumulation via a pinned
+  `%collect-acc`), `assert`/`debug-assert`. Build+run verified (sum-via-iterate=15,
+  fib(10)=55, when-let, collecting evens). Also made `parse_local_expr_compat` always
+  emit `Statement::Local` so `iterate`'s `begin`-wrapped local method lowers.
+- **DRM system classes (+10), corpus 60 → 63:** `<synchronization>`/`<lock>`/
+  `<simple-lock>`/`<recursive-lock>`/`<semaphore>`/`<notification>`/`<thread>`/
+  `<generic-function>`/`<float-vector>`/`<type-error>` as pure-Dylan `define class`
+  (AOT-safe; new `system-classes.dylan` + self-rebuild). `instance?` CPL verified;
+  `notifications-spec`/`threads-spec`/`test-assignment` now lower. Next sibling
+  blockers: `<byte>`/`<restart>`/`<class>`/`<singleton>`/`<type>`/`<stretchy-sequence>`.
+- **Funcall fix (real root cause):** a user `define function f` whose name collides
+  with a stdlib generic (the loader rewrites every stdlib `define function` to a
+  method-on-`<object>` generic) resolved to the STDLIB body — `make_function_ref`
+  short-circuited on `is_generic_defined` before checking for a DIRECT registration.
+  Fix: direct `(name,arity)` registration now wins; genuine multi-method generics
+  still use the trampoline. Un-deferred `compose`/`curry`/`rcurry`/`always` (fixed
+  arity). Verified: `compose(inc,double)(5)=11`, `curry(\+,10)(5)=15`, `rcurry`,
+  `always`, `let f = method(a,b) a+b end; f(3,4)=7`. (N-ary forms await `#rest`
+  collection — next.)
+- **Verified:** in-tree 55/55 both paths, nod-runtime 150/0, nod-sema 44/0,
+  smoke-aot 6/6, eval=2, corpus 63/161.
 
 ### 2026-06-15 — Iteration 18: `<character>` code-convertible + char ops (autonomous wave)
 
