@@ -21,6 +21,24 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 
 *(newest first)*
 
+### 2026-06-15 — Iteration 18: `<character>` code-convertible + char ops (autonomous wave)
+
+- Added `%char-code`/`%code-char` primitives (nod-runtime + lower.rs + codegen/jit) so
+  a `<character>` converts to/from its integer code; `<character>` carved out of the
+  generic object-equal path so char `=`/`~=`/`<`/`>` use inline integer primops; and
+  i32↔i64 coercion at every runtime-call boundary (chars are raw i32, integers tagged
+  fixnums — kept the i32 repr because a tagged-fixnum char would be bit-identical to
+  `<integer>` and corrupt `instance?`/dispatch).
+- `strings.dylan`: `<character>` predicates (`whitespace?`/`alphabetic?`/`digit?`/
+  `alphanumeric?`/`uppercase?`/`lowercase?`), `as-uppercase`/`as-lowercase` on a char,
+  and `as(<integer>, ch)` / `as(<character>, code)` (compile-time intrinsic).
+- Verified build+run: `'A'='A'`=#t, `'A'='B'`=#f, `as(<integer>,'A')`=65,
+  `as-uppercase('a')`='A', `digit?('5')`=#t/`digit?('x')`=#f, `whitespace?(' ')`=#t.
+  nod-runtime 150/150 (+3), in-tree 55/55 both paths, smoke-aot 6/6, corpus 60/161
+  (byte-identical pass set). Unblocks the char API the strings agent had to skip.
+- Limitation (documented): runtime dispatch on a raw `<character>` resolves by STATIC
+  type (an odd code can't be runtime-classified vs a pointer) — correct for these ops.
+
 ### 2026-06-15 — Iteration 17: macro `*` repetition + functional stdlib (autonomous wave)
 
 - **Macro engine: zero-or-more repetition.** `{ unit } ...` (optionally `{ unit } ; ...`
