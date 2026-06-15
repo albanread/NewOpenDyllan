@@ -543,3 +543,232 @@ define function replace-elements! (c, pred, new-fn) => (result)
   end;
   v
 end function;
+
+// ─── copy-sequence — fresh same-length vector copy (arity-1) ─────────────────
+//
+// DRM `copy-sequence(seq)` returns a fresh sequence with the same elements.
+// strings.dylan already owns the shape-preserving `<byte-string>` methods
+// (arities 1 and 3), which outrank this `<object>` rewrite for byte-strings;
+// this body is the general fallback for vectors / lists / stretchy vectors,
+// returning a `<simple-object-vector>` (the corpus copy-sequence cases only
+// check element identity / order, not result class). The bounded
+// `copy-sequence(seq, start:, end:)` variant is intentionally NOT added as an
+// `<object>` arity-2/3 method: at the call site `start:` / `end:` keywords
+// collapse to bare positional values (the keyword name is dropped during
+// lowering — see lower.rs `%kw-arg`), so a 2-arg body cannot tell `start: n`
+// from `end: n` and would silently compute the wrong slice. Arity-1 is the
+// only unambiguous general form, so it is the only one we provide here.
+
+define function copy-sequence (c) => (result)
+  map(nod-identity, c)
+end function;
+
+// ─── fill! — set every element to `value` (arity-2) ─────────────────────────
+//
+// DRM `fill!(seq, value)` stores `value` into every element and returns the
+// (mutated) sequence. Walks the backing store by index via
+// `%vector-element-setter`, so it mutates `<simple-object-vector>` /
+// stretchy-vector receivers in place. The bounded `fill!(seq, value, start:,
+// end:)` form is omitted for the same keyword-collapse reason as
+// `copy-sequence`: `start:` / `end:` reduce to indistinguishable positional
+// args, so a ranged body would mutate the wrong span. Arity-2 (fill the whole
+// sequence) is unambiguous and is what the bulk of the corpus reaches for.
+
+define function fill! (s, value) => (s)
+  let n = %collection-size(s);
+  let i = 0;
+  until (i = n)
+    %vector-element-setter(value, s, i);
+    i := i + 1;
+  end;
+  s
+end function;
+
+// ─── position — index of the first element `=` to `target` (arity-2) ────────
+//
+// DRM `position(seq, target)` returns the integer key (index, for a sequence)
+// of the first element `=` to `target`, or #f when none matches. FIP-driven so
+// it covers every concrete sequence class. The keyword variants (`test:`,
+// `start:`, `end:`, `skip:`) collapse to extra positional args at the call
+// site, raising the arity past 2, so this method is selected only for the
+// plain `position(seq, target)` form — the unambiguous one (the keyword forms
+// live in testworks-gated files and aren't reached yet).
+
+define function position (c, target) => (key)
+  let state = %fip-init(c);
+  let i = 0;
+  let key = #f;
+  until (%fip-finished?(state) | (key ~= #f))
+    if (%fip-current-element(state) = target)
+      key := i;
+    else
+      i := i + 1;
+      %fip-advance!(state);
+    end;
+  end;
+  key
+end function;
+
+// ─── count — number of elements satisfying `pred` (arity-2) ─────────────────
+//
+// DRM `count(predicate, sequence)` counts the elements for which `predicate`
+// returns true. `pred` is a first-class `<function>` value, invoked via
+// `%funcall1` (the `map` / `do` trampoline). FIP-driven, total, returns an
+// `<integer>`. (The bit-vector `count(vector, bit-value:)` form is a different,
+// `<bit-vector>`-class operation living in a library-gated suite; it never
+// reaches this `<object>` method.)
+
+define function count (pred, c) => (n)
+  let state = %fip-init(c);
+  let n = 0;
+  until (%fip-finished?(state))
+    if (%funcall1(pred, %fip-current-element(state)))
+      n := n + 1;
+    else
+      #f
+    end;
+    %fip-advance!(state);
+  end;
+  n
+end function;
+
+// ─── find-element — first element satisfying `pred` (arity-2) ───────────────
+//
+// DRM `find-element(collection, predicate)` returns the first element for which
+// `predicate` is true, or #f (its `failure:` default) when none matches.
+// Companion to the existing `find-key` (which returns the index); this returns
+// the element itself. FIP-driven, so it spans every sequence shape.
+
+define function find-element (c, pred) => (e)
+  let state = %fip-init(c);
+  let found = #f;
+  let result = #f;
+  until (%fip-finished?(state) | found)
+    let x = %fip-current-element(state);
+    if (%funcall1(pred, x))
+      found := #t;
+      result := x;
+    else
+      %fip-advance!(state);
+    end;
+  end;
+  result
+end function;
+
+// ─── remove-duplicates — drop later `=`-duplicates, keep first occurrence ────
+//
+// DRM `remove-duplicates(seq)` returns a fresh sequence with duplicate elements
+// (under `=`) removed, preserving the first occurrence and original order.
+// Built by scanning a vector copy and collecting, for each element, only those
+// not already `=` to an earlier kept element. O(n²) — fine for the small corpus
+// inputs. Returns a `<simple-object-vector>`; the `test:` keyword variant
+// collapses to a trailing positional arg this single-method generic absorbs,
+// and the default `=` is used.
+
+define function nod-seen-before? (v, upto, x) => (yes?)
+  let j = 0;
+  let hit = #f;
+  until ((j = upto) | hit)
+    if (%vector-element(v, j) = x)
+      hit := #t;
+    else
+      j := j + 1;
+    end;
+  end;
+  hit
+end function;
+
+define function remove-duplicates (c) => (result)
+  let v = map(nod-identity, c);
+  let n = %collection-size(v);
+  let acc = %nil();
+  let i = 0;
+  until (i = n)
+    let x = %vector-element(v, i);
+    if (nod-seen-before?(v, i, x))
+      #f
+    else
+      acc := %pair-alloc(x, acc);
+    end;
+    i := i + 1;
+  end;
+  reverse(acc)
+end function;
+
+// `remove-duplicates!` is the (notionally destructive) sibling; we lack an
+// in-place sequence-shrink primitive, so it returns the same fresh result as
+// `remove-duplicates` (same observable elements / order). Honest about being
+// non-destructive — see report.
+
+define function remove-duplicates! (c) => (result)
+  remove-duplicates(c)
+end function;
+
+// ─── union / intersection / difference — set ops over `=` (arity-2) ─────────
+//
+// DRM set-style operations on two sequences, comparing elements with `=` and
+// returning a fresh `<list>` (the DRM allows any sequence result; a list is the
+// natural shape over the pair primitive, and the corpus cases only check
+// membership / size of the result).
+//
+//   union(s1, s2)        — every element of s1, plus the s2 elements not in s1.
+//   intersection(s1, s2) — the s1 elements that also appear in s2.
+//   difference(s1, s2)   — the s1 elements that do NOT appear in s2.
+//
+// All compose over the existing `member?` (linear `=` search) + the list
+// primitives, so no new runtime support is needed. `member?` here is the
+// boolean form already defined above. Duplicates within an input are preserved
+// in the s1-derived portions (DRM leaves de-duplication to `remove-duplicates`);
+// `union` de-dups only across the boundary (skips s2 elements already present
+// in s1), matching the common "merge two sets" usage.
+
+define function intersection (s1, s2) => (result)
+  let state = %fip-init(s1);
+  let acc = %nil();
+  until (%fip-finished?(state))
+    let x = %fip-current-element(state);
+    if (member?(x, s2))
+      acc := %pair-alloc(x, acc);
+    else
+      #f
+    end;
+    %fip-advance!(state);
+  end;
+  reverse(acc)
+end function;
+
+define function difference (s1, s2) => (result)
+  let state = %fip-init(s1);
+  let acc = %nil();
+  until (%fip-finished?(state))
+    let x = %fip-current-element(state);
+    if (member?(x, s2))
+      #f
+    else
+      acc := %pair-alloc(x, acc);
+    end;
+    %fip-advance!(state);
+  end;
+  reverse(acc)
+end function;
+
+define function union (s1, s2) => (result)
+  let acc = %nil();
+  // Collect all of s1 (reversed), then append the s2 elements not in s1.
+  let st1 = %fip-init(s1);
+  until (%fip-finished?(st1))
+    acc := %pair-alloc(%fip-current-element(st1), acc);
+    %fip-advance!(st1);
+  end;
+  let st2 = %fip-init(s2);
+  until (%fip-finished?(st2))
+    let x = %fip-current-element(st2);
+    if (member?(x, s1))
+      #f
+    else
+      acc := %pair-alloc(x, acc);
+    end;
+    %fip-advance!(st2);
+  end;
+  reverse(acc)
+end function;
