@@ -1204,27 +1204,19 @@ impl<'a> Parser<'a> {
             Some(m) => join(kw.span, m.span),
             None => kw.span,
         };
-        if methods.len() == 1 {
-            let m = methods.into_iter().next().unwrap();
-            // Convert one local method back to an `Expr::LocalMethod` (Sprint
-            // 03 callers expect that). The body is a Vec<Statement>; coerce
-            // to Vec<Expr> by extracting bare-Expr statements where possible
-            // and wrapping anything else in Expr::Stmt.
-            let body: Vec<Expr> = m
-                .body
-                .into_iter()
-                .map(|s| match s {
-                    Statement::Expr(e) => e,
-                    other => Expr::Stmt(Box::new(other)),
-                })
-                .collect();
-            return Ok(Expr::LocalMethod {
-                span,
-                name: m.name,
-                params: m.params,
-                body,
-            });
-        }
+        // Always emit `Expr::Stmt(Statement::Local)` — including the
+        // single-method case. `Statement::Local` is the ONLY local-method
+        // shape the lowering's lift pre-pass recognises (`lift_statement`
+        // hoists it to a top-level function and wires up the self/mutual
+        // recursion cells); a bare `Expr::LocalMethod` in expression
+        // position is rejected by lowering ("expression form `local-method`
+        // not lowered"). Wrapping the single case the same way the
+        // multi-method case already is lets a `begin`-bodied macro
+        // expansion — e.g. `iterate NAME (…) … end` lowering to
+        // `begin local method NAME (…) … end; NAME(…) end` — lower
+        // correctly. (Previously the single case produced `Expr::LocalMethod`
+        // for a now-defunct "Sprint 03 callers expect that" contract; no
+        // live lowering path consumes that variant successfully.)
         Ok(Expr::Stmt(Box::new(Statement::Local {
             span,
             methods,
@@ -2976,6 +2968,8 @@ impl<'a> Parser<'a> {
                 | "iterate"
                 | "method"
                 // stdlib body-shaped macros
+                | "when-let"
+                | "if-let"
                 | "for-each"
                 | "with-cleanup"
                 | "dynamic-bind"

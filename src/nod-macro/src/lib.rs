@@ -825,6 +825,8 @@ fn match_pattern_at(
                                             || tok_text_eq(t, "begin")
                                             || tok_text_eq(t, "method")
                                             || tok_text_eq(t, "when")
+                                            || tok_text_eq(t, "when-let")
+                                            || tok_text_eq(t, "if-let")
                                             || tok_text_eq(t, "with-cleanup")
                                             || tok_text_eq(t, "iterate")
                                             || tok_text_eq(t, "for-each")
@@ -1130,6 +1132,14 @@ fn is_template_no_rename(name: &str) -> bool {
             | "in"
             | "values"
             | "next-method"
+            // The `collecting` / `collect` macro pair shares a hidden
+            // accumulator by NAME (`collecting`'s `let %collect-acc` binder
+            // must resolve `collect`'s `%collect-acc` reference). Pin it out
+            // of hygiene renaming so the cross-macro reference is stable —
+            // the engine's analogue of the reference compiler's `?=_collector`
+            // unhygienic injection. Nested `collecting` forms still isolate
+            // via ordinary lexical `let` shadowing.
+            | "%collect-acc"
             | "make"
             | "as"
             | "instance?"
