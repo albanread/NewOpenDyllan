@@ -51,8 +51,22 @@ impl Heap {
     /// and this call — `nod_pair_alloc` does that bracketing on the
     /// JIT side.
     pub fn alloc_pair(&self, head: Word, tail: Word, classes: &ClassTable) -> Word {
+        // `alloc_object` below can itself trigger a minor GC, which a
+        // moving collector uses to EVACUATE `head`/`tail`'s targets. The
+        // caller's `RootGuard`s keep the *objects* alive and update the
+        // caller's slots, but the `head`/`tail` VALUES handed to this
+        // function are independent stack copies the GC never rewrites.
+        // Root them here too and RELOAD after the allocation, so the
+        // values we store into the new pair are the post-GC addresses —
+        // otherwise a `pair(x, acc)` whose alloc evacuates `acc` writes a
+        // stale tail pointing into a freed page (the loop-carried
+        // accumulator corruption). See `nod_pair_alloc`.
+        let _h = crate::make::RootGuard::new(&head);
+        let _t = crate::make::RootGuard::new(&tail);
         // Payload = head (8B) + tail (8B) = 16 bytes after the Wrapper.
         let w = self.alloc_object(classes.pair(), 16);
+        let head = _h.reload();
+        let tail = _t.reload();
         // SAFETY: `w` is a freshly-bumped pointer-tagged Word; its first
         // 8 bytes are a Wrapper installed by `alloc_object`; the next 16
         // bytes are zero-filled payload we now fill in.

@@ -21,6 +21,37 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 
 *(newest first)*
 
+### 2026-06-15 — Iteration 26: `#rest` on lifted closures (DRM `always`) + a GC pointer-staleness fix uncovered along the way
+
+- **Lifted-closure `#rest`** (variadic escaping closures): `method (#rest r) … end`
+  returned as a closure VALUE is now callable with a variable arg count. Encoding:
+  new `<function>` kind-tag `FUNCTION_KIND_CLOSURE_REST=4`, arity slot = F+1 (body
+  value-arity), F recovered as arity-1; `nod_make_rest_closure` maker; runtime
+  `invoke_rest_closure` collects trailing actuals into a SOV (RootGuard'd) and calls
+  the body. Lowering threads `ClosureInfo.rest_fixed`. Rewrote stdlib `always` to
+  `method (#rest ignore) value end`. Build+run verified: `always(1)()`=1,
+  `always(1)(99,98)`=1, `apply(always(1),#(2,3,4))`=1; fixed-arity closures
+  (`curry`/`compose`/`method(x,y)`) and the wrong-arity signal path all intact.
+- **Bug I fixed in the agent's impl**: `invoke_rest_closure` read `code_ptr_or_panic(f)`
+  AFTER the rest-SOV allocation, but the moving GC relocates the closure during that
+  alloc → stale `f` → null code ptr → crash at 0x0. Moved the `code_ptr` read before the
+  allocation (the code address is non-GC, stable).
+- **Pre-existing GC bug uncovered + partially fixed.** Verifying the feature under GC
+  stress surfaced a heap-corruption: a tight allocating loop TRUNCATES its live
+  structure. Three workflows (understand / adversarial-critique / diagnose) +
+  instrumentation pinned it. It was MIS-diagnosed twice (AOT roots; within-gen G0→G0
+  evac dest-release) before the real causes emerged:
+  1. **`alloc_pair` arg staleness — FIXED** (lists.rs): wrote by-value `head`/`tail`
+     after its own `alloc_object` GC; now RootGuard+reload. Fixed the curry+200k repro
+     (25289→200000); raised the plain-cons corruption threshold ~175k→~520k nodes.
+  2. **Cross-gen multi-chunk evac sever — OPEN, documented** (deep newgc-core; defeated a
+     focused agent — its fix was O(pages²)). Affects only >~520k-node tight-loop builds.
+- The corruption is PRE-EXISTING on `origin/main` (the spread-apply path just made it
+  surface); both fixes here strictly improve correctness. See known-limitations
+  "GC pointer staleness across allocation-triggered collection".
+- **Gates:** eval=2, in-tree 55/55 BOTH paths, smoke-aot 6/6, nod-sema 48/0,
+  nod-runtime 148/2 (2 pre-existing full-suite class-id-drift flakes), corpus 74/161.
+
 ### 2026-06-15 — Iteration 25: `disjoin` / `conjoin` predicate combinators
 
 - **`disjoin`/`conjoin`** added to `stdlib/functional.dylan` (DRM functional ops):

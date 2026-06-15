@@ -71,6 +71,44 @@ or a standing design trade-off are kept here.
 
 ---
 
+## GC pointer staleness across allocation-triggered collection
+
+* **Symptom**: a program that builds a large heap structure in a tight allocating
+  loop silently TRUNCATES it. E.g. `let acc = #(); for i: acc := pair(i, acc)` over
+  N nodes returns `size(acc) < N`. Reproduces with a plain cons loop (no
+  `apply`/`curry`); `curry(\+,1)(2)` before a 200k loop made it surface earlier by
+  shifting GC scheduling. Originally mis-attributed to AOT roots, then to a within-gen
+  G0→G0 evac dest-page release — both refuted by instrumentation.
+* **Two distinct bugs, traced 2026-06-15:**
+  1. **`alloc_pair` argument staleness — FIXED.** `Heap::alloc_pair` (lists.rs) called
+     `alloc_object` (which can fire a moving minor GC) and then wrote its BY-VALUE
+     `head`/`tail` parameters into the new pair. The caller's `RootGuard`s update the
+     caller's slots, but `alloc_pair`'s own copies were never re-read, so a
+     `pair(x, acc)` whose allocation evacuated `acc` stored a STALE tail into a freed
+     page. Fix: `RootGuard` + `reload()` `head`/`tail` across `alloc_object` inside
+     `alloc_pair`. This fixed the `curry`+200k repro (25289→200000) and raised the
+     plain-cons corruption threshold from ~175k to ~520k nodes. (Same bug class as the
+     `code_ptr`-stale crash fixed in `invoke_rest_closure`: any runtime fn that holds a
+     pointer across its own allocation must root+reload it.)
+  2. **Cross-gen multi-chunk evacuation sever — OPEN.** Beyond ~520k nodes a major
+     collection / older-gen promotion still truncates by a fixed prefix. `acc` is
+     correctly rooted+updated (a module-`define variable` accumulator truncates too),
+     so it is NOT codegen/root staleness: the major's mark cannot follow the full chain
+     because a tail pointer INSIDE the old-gen list was left dangling by a prior
+     cross-gen chunked evacuation. In `evacuate_with_roots`'s chunked loop
+     (evac.rs ~786-834), `phase2_rewrite` walks only `dest_gen`, so a not-yet-copied
+     later-chunk source object's pointer into an EARLIER chunk's already-released source
+     page is never rewritten via the live forward marker before that page is reclaimed.
+     A correct fix exists (walk from_gen sources in phase2 / defer source release to
+     end-of-cycle) but the obvious form is O(pages²) per evac and/or breaks the
+     chunked dest budget (released sources replenish Free for dest); a careful,
+     budget-preserving fix is still needed.
+* **Scope**: (1) done (lists.rs, ~14 lines). (2) open, deep (newgc-core evacuator);
+  affects only extreme cases (>~520k live nodes built in a tight allocating loop). Pre-
+  existing on `origin/main`; the fixes above strictly improve correctness.
+
+---
+
 ## AOT end-safepoint root accounting and permanent roots (design note)
 
 * **Symptom**: an AOT EXE panicked at end-of-safepoint with
