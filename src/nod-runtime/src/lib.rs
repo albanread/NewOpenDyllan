@@ -6,7 +6,7 @@
 //!
 //! **Before adding stdlib-shape functions to this crate, read
 //! `docs/STDLIB_BOUNDARY.md`.** New user-visible stdlib API belongs in
-//! `src/nod-dylan/dylan-sources/stdlib.dylan` by default. Rust additions
+//! `stdlib/*.dylan` by default. Rust additions
 //! are gated to six legitimate categories (GC, safepoints, FFI/OS, tag
 //! manipulation, atomics on shared state, bootstrap primitives). Rule 4
 //! is the pre-flight: write the Dylan version first.

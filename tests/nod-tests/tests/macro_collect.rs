@@ -143,9 +143,7 @@ fn dylan_macro_collect_matches_rust() {
     // `cond_smoke` are *call sites*, not definitions → 0 macros, which
     // both engines must agree on.
     let stdlib = workspace_root()
-        .join("src")
-        .join("nod-dylan")
-        .join("dylan-sources")
+        .join("stdlib")
         .join("stdlib.dylan");
     let corpus = [
         stdlib.clone(),

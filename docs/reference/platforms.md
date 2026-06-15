@@ -54,7 +54,7 @@ Dylan-and-Rust source on both platforms:
 - **`nod-dfm`** — IR, liveness, safepoint root computation.
 - **`nod-llvm`** — codegen. LLVM is cross-platform; the target triple differs
   between variants but the IR-emission code is shared.
-- **`nod-dylan/dylan-sources/stdlib.dylan`** — the Dylan-side stdlib. Anything
+- **`stdlib/*.dylan`** — the Dylan-side stdlib. Anything
   that does not cross into platform FFI ports unchanged.
 - **NewGC core** (page heap, write barriers, layout) — the algorithms are
   platform-agnostic; only the commit/decommit syscalls differ.

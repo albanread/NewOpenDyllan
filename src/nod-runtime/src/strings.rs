@@ -1,5 +1,5 @@
 //! **Stdlib boundary**: new string APIs go in
-//! `src/nod-dylan/dylan-sources/stdlib.dylan`, not here. This file
+//! `stdlib/*.dylan`, not here. This file
 //! hosts byte-string PRIMITIVES (allocation, byte-get/set, bulk-copy)
 //! per `docs/STDLIB_BOUNDARY.md` Rule 2 (tag/layout + GC integration).
 //! Higher-level string operations (split, format, search, replace)

@@ -4,7 +4,7 @@
 //! `$MB-OK`, `$WM-PAINT`, … set: from the source file
 //! `data/win32_constants.txt`, through the build-time embedding into
 //! `nod-winapi`, through the generator-emitted
-//! `src/nod-dylan/dylan-sources/win32-constants.dylan`, through the
+//! `stdlib/win32-constants.dylan`, through the
 //! stdlib loader's process-global `STDLIB_CONSTANTS` table, into
 //! user-code lowering where `Expr::Ident("$MB-OK")` becomes
 //! `ConstValue::Integer(0)`.

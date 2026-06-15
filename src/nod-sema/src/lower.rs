@@ -7,7 +7,7 @@
 //! control-flow drift (the first being `nod-reader::ast`). Before
 //! adding another arm for a new control-flow form, read
 //! `docs/MACRO_BOUNDARY.md`. New surface forms should be `define
-//! macro` in `src/nod-dylan/dylan-sources/stdlib.dylan` and expanded
+//! macro` in `stdlib/*.dylan` and expanded
 //! by `nod-macro` before this file ever sees them.
 //!
 //! The remaining hardcoded forms here (`If`, `Begin`, `Let`,
@@ -259,7 +259,7 @@ impl MethodRegistration {
 /// Primitives wired here are intentionally low-level — they bridge
 /// Dylan source to the existing Sprint 20 runtime API. Higher-level
 /// generics (`size`, `concatenate`, `for-each`) live in
-/// `src/nod-dylan/dylan-sources/stdlib.dylan` and call these.
+/// `stdlib/*.dylan` and call these.
 const LOWER_PRIMITIVE_TABLE: &[(&str, &str, usize, TypeEstimate)] = &[
     // Fail-fast: signal a <simple-error> with the given <byte-string> as
     // message. Does not return — the runtime's nod_error path raises

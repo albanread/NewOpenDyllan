@@ -1,5 +1,5 @@
 //! **Stdlib boundary**: new collection APIs go in
-//! `src/nod-dylan/dylan-sources/stdlib.dylan`, not here. This file is a
+//! `stdlib/*.dylan`, not here. This file is a
 //! frozen-by-policy host for collection PRIMITIVES that genuinely need
 //! Rust (allocation, GC root coordination, tag-aware iteration). See
 //! `docs/STDLIB_BOUNDARY.md` — Rule 4 (pre-flight) is the gate.
@@ -45,7 +45,7 @@
 //! ### Deviation from the spec
 //!
 //! The spec asked for the FIP and the core collection generics to live
-//! in `src/nod-dylan/dylan-sources/stdlib.dylan`. That file doesn't
+//! in `stdlib/*.dylan`. That file doesn't
 //! exist yet (the directory is empty as of Sprint 19), and the loader
 //! plumbing required to fold a stdlib file into the lowering pass
 //! before user code lowers is itself a Sprint 22 task. To keep

@@ -119,7 +119,7 @@ is irreplaceable as a design reference.
    NewOpenDylan does not have, decide: add the primop, or rewrite the method
    against existing primitives.
 4. **Copy the method** to the appropriate file under
-   `src/nod-dylan/dylan-sources/`. Preserve the original file's header comment
+   `stdlib/`. Preserve the original file's header comment
    block; add an `// Adapted from Open Dylan, sources/dylan/collection.dylan,
    <commit-hash>` attribution above the method.
 5. **Update `README.md`** if this is the first Gwydion-derived file landing (the

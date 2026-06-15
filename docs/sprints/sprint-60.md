@@ -57,7 +57,7 @@ across the rebuild.
 
 ## 2. Move the stdlib into its own folders
 
-**Objective.** Replace the single `src/nod-dylan/dylan-sources/stdlib.dylan` with
+**Objective.** Replace the single `stdlib/*.dylan` with
 a structured `stdlib/` directory split by concern, so the standard library can
 grow without one monolithic file.
 
@@ -74,7 +74,7 @@ grow without one monolithic file.
 project/LID file; the full build and test sweep are green; no behaviour change.
 
 **Status — done.** The monolithic `stdlib.dylan` is split into
-`src/nod-dylan/dylan-sources/stdlib/`: `macros.dylan`, `collections.dylan`,
+`stdlib/`: `macros.dylan`, `collections.dylan`,
 `strings.dylan`, `ffi-callbacks.dylan`, `structs.dylan`, `streams.dylan`, and the
 generated `win32-constants.dylan`. The ordered file list lives in `STDLIB_FILES`
 (`src/nod-sema/src/stdlib.rs`) — `macros.dylan` is first so it owns every stdlib

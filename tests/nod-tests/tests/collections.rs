@@ -426,7 +426,7 @@ fn map_preserves_collection_class_kind() {
 // stdlib + primitive-op machinery:
 //
 //   * `dylan_stdlib_loader_runs_marker` — the `nod-stdlib-marker()`
-//     function defined in `src/nod-dylan/dylan-sources/stdlib.dylan`
+//     function defined in `stdlib/*.dylan`
 //     is JIT'd by the loader and reachable as a top-level function from
 //     user code. Confirms Phase A's loader path is live.
 //   * `dylan_size_of_three_element_list_is_3` — `size(#(10, 20, 30))`

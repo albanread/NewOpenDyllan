@@ -4,7 +4,7 @@
 //! truth — Sprint 29 Phase A established that `windows_api.db`
 //! schema v5 carries enum-type rows but NOT the integer values of
 //! their members) and emits
-//! `src/nod-dylan/dylan-sources/stdlib/win32-constants.dylan`. The
+//! `stdlib/win32-constants.dylan`. The
 //! generated file is auto-loaded by the stdlib loader (see
 //! `nod-sema/src/stdlib.rs`) so user-code expressions like
 //! `$MB-OK` resolve to the integer value at lowering time.
@@ -49,9 +49,6 @@ fn main() {
     let workspace_root = workspace_root_from_cwd_or_env();
     let src_path = workspace_root.join("data").join("win32_constants.txt");
     let out_path = workspace_root
-        .join("src")
-        .join("nod-dylan")
-        .join("dylan-sources")
         .join("stdlib")
         .join("win32-constants.dylan");
 

@@ -4,7 +4,7 @@
 //! (`eval_expr_to_string`, `lower_module`, `lower_module_full`,
 //! `run_function_to_i64`, the various `dump_*_for_file` helpers)
 //! routes through [`ensure_loaded`]. The loader parses
-//! `src/nod-dylan/dylan-sources/stdlib.dylan` once, runs the
+//! `stdlib/*.dylan` once, runs the
 //! macro engine over it, lowers it to DFM, and JIT-compiles every
 //! function. Side effects on `nod_runtime`'s process-global
 //! registries (macro table, dispatch table) make the stdlib's
@@ -101,7 +101,7 @@ static STDLIB_MACROS: OnceLock<MacroTable> = OnceLock::new();
 static STDLIB_CONSTANTS: OnceLock<HashMap<String, i128>> = OnceLock::new();
 
 /// Ordered list of stdlib source files the loader processes. Each entry
-/// lives under `src/nod-dylan/dylan-sources/stdlib/`. The first file owns
+/// lives under `stdlib/`. The first file owns
 /// the macros (so `for-each` etc. remain reachable via
 /// [`stdlib_macro_source`]); subsequent files contribute their items to the
 /// merged module, in this order. Add new entries here when introducing a
@@ -109,55 +109,55 @@ static STDLIB_CONSTANTS: OnceLock<HashMap<String, i128>> = OnceLock::new();
 const STDLIB_FILES: &[(&str, &str)] = &[
     (
         "stdlib/macros.dylan",
-        include_str!("../../nod-dylan/dylan-sources/stdlib/macros.dylan"),
+        include_str!("../../../stdlib/macros.dylan"),
     ),
     (
         "stdlib/collections.dylan",
-        include_str!("../../nod-dylan/dylan-sources/stdlib/collections.dylan"),
+        include_str!("../../../stdlib/collections.dylan"),
     ),
     (
         "stdlib/arrays.dylan",
-        include_str!("../../nod-dylan/dylan-sources/stdlib/arrays.dylan"),
+        include_str!("../../../stdlib/arrays.dylan"),
     ),
     (
         "stdlib/system-classes.dylan",
-        include_str!("../../nod-dylan/dylan-sources/stdlib/system-classes.dylan"),
+        include_str!("../../../stdlib/system-classes.dylan"),
     ),
     (
         "stdlib/strings.dylan",
-        include_str!("../../nod-dylan/dylan-sources/stdlib/strings.dylan"),
+        include_str!("../../../stdlib/strings.dylan"),
     ),
     (
         "stdlib/sequences.dylan",
-        include_str!("../../nod-dylan/dylan-sources/stdlib/sequences.dylan"),
+        include_str!("../../../stdlib/sequences.dylan"),
     ),
     (
         "stdlib/lists.dylan",
-        include_str!("../../nod-dylan/dylan-sources/stdlib/lists.dylan"),
+        include_str!("../../../stdlib/lists.dylan"),
     ),
     (
         "stdlib/functional.dylan",
-        include_str!("../../nod-dylan/dylan-sources/stdlib/functional.dylan"),
+        include_str!("../../../stdlib/functional.dylan"),
     ),
     (
         "stdlib/numbers.dylan",
-        include_str!("../../nod-dylan/dylan-sources/stdlib/numbers.dylan"),
+        include_str!("../../../stdlib/numbers.dylan"),
     ),
     (
         "stdlib/ffi-callbacks.dylan",
-        include_str!("../../nod-dylan/dylan-sources/stdlib/ffi-callbacks.dylan"),
+        include_str!("../../../stdlib/ffi-callbacks.dylan"),
     ),
     (
         "stdlib/structs.dylan",
-        include_str!("../../nod-dylan/dylan-sources/stdlib/structs.dylan"),
+        include_str!("../../../stdlib/structs.dylan"),
     ),
     (
         "stdlib/streams.dylan",
-        include_str!("../../nod-dylan/dylan-sources/stdlib/streams.dylan"),
+        include_str!("../../../stdlib/streams.dylan"),
     ),
     (
         "stdlib/win32-constants.dylan",
-        include_str!("../../nod-dylan/dylan-sources/stdlib/win32-constants.dylan"),
+        include_str!("../../../stdlib/win32-constants.dylan"),
     ),
 ];
 

@@ -1,5 +1,5 @@
 //! **Stdlib boundary**: new condition CLASSES go in
-//! `src/nod-dylan/dylan-sources/stdlib.dylan`. The signal/handler/unwind
+//! `stdlib/*.dylan`. The signal/handler/unwind
 //! MECHANISM stays here per `docs/STDLIB_BOUNDARY.md` (Rust panic
 //! coordination, CleanupGuard NLX path — frozen exception). Condition
 //! hierarchy, accessor methods, and printers belong in Dylan.

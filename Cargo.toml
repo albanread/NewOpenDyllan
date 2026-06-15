@@ -11,7 +11,6 @@ members = [
     "src/nod-loader",
     "src/nod-runtime",
     "src/nod-aot-stub",
-    "src/nod-dylan",
     "src/nod-winapi",
     "src/newgc-core",
     "tests/nod-tests",

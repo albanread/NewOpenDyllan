@@ -207,7 +207,7 @@ runs on normal exit only, after cleanup (`conditions.rs:667-710`).
 | `<exit-procedure>` | `<object>` |
 
 The full condition hierarchy, accessor generics, and printers live in Dylan
-(`src/nod-dylan/dylan-sources/stdlib.dylan`); only the signal/handler/unwind
+(`stdlib/*.dylan`); only the signal/handler/unwind
 mechanism is frozen in Rust. See [Conditions](../language/conditions.md).
 
 ### Functions and closures

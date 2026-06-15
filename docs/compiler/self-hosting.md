@@ -306,7 +306,7 @@ stdlib** today — most collection, condition, dispatch, and hashing behaviour l
 in `nod-runtime` as Rust — but the direction of growth is fixed: **new stdlib goes
 in Dylan; the Rust runtime stays focused on what only it can do.**
 
-User-visible stdlib code lives in `src/nod-dylan/dylan-sources/stdlib.dylan` (and
+User-visible stdlib code lives in `stdlib/*.dylan` (and
 sibling `.dylan` files as the directory grows). What the **runtime provides** vs
 what **stdlib.dylan defines** is governed by five rules:
 
@@ -383,7 +383,7 @@ resolver call covers both.
 | `compiler/dylan-lexer.dylan` | ~800 | The lexer — token class hierarchy, `lex`, `non-trivia-tokens` |
 | `compiler/dylan-parser.dylan` | — | The parser |
 | `compiler/dylan-lex-shim.dylan` | — | Shim entry points: `dylan-lex-collect`, `dylan-parse-emit`, `dylan-parse-collect`; `token-rust-kind` generic |
-| `src/nod-dylan/dylan-sources/stdlib.dylan` | — | The Dylan standard library — the growing side of the boundary |
+| `stdlib/*.dylan` | — | The Dylan standard library — the growing side of the boundary |
 
 ## See also
 

@@ -7,7 +7,7 @@
 //! `docs/MACRO_BOUNDARY.md`.** The frozen kernel forms (`If`, `Begin`,
 //! `Let`, `Method`, definitional items, `Block`-with-cleanup) are the
 //! complete list of legitimate hardcoded variants. Everything else
-//! belongs in `src/nod-dylan/dylan-sources/stdlib.dylan` as a
+//! belongs in `stdlib/*.dylan` as a
 //! `define macro` and gets surfaced via `Expr::MacroCall`. Sprint 25
 //! retired `Expr::Unless` to that pattern; future additions follow
 //! the same path. Rule 3 (pre-flight): try `define macro` first.

@@ -250,7 +250,7 @@ of hardcoded forms is the floor; everything above it is a macro.
 ### Default: new surface forms are macros
 
 Any new control-flow keyword, iteration form, binding-shape, or sugar lands as a
-`define macro` in `src/nod-dylan/dylan-sources/stdlib.dylan` (or a sibling
+`define macro` in `stdlib/*.dylan` (or a sibling
 `.dylan` file). New `Expr::*` or `Statement::*` variants in `nod-reader::ast` are
 the exception, not the default.
 
@@ -311,7 +311,7 @@ surface forms.
   Macros.
 
 The current stdlib macros are `for-each`, `unless`, `when`, `cond`, and
-`with-cleanup`, in `src/nod-dylan/dylan-sources/stdlib.dylan`. `unless` is a
+`with-cleanup`, in `stdlib/*.dylan`. `unless` is a
 `define macro` rather than a hardcoded `Expr` variant. The trend to track
 is that the `define macro` count grows while the hardcoded control-flow
 `Expr`/`Statement` variant count stays flat or shrinks.
@@ -333,7 +333,7 @@ sealed calls are resolved.
 | `src/nod-macro/src/lib.rs` | 1263–1571 | Phase F: `ExpansionCtx`, `expand_module`, `expand_item`, `expand_stmt`, `expand_expr`, `expand_one` |
 | `src/nod-macro/src/lib.rs` | 1573–1846 | Span rewriting: `set_top_span`, `call_site_fragments`, `rewrite_spans_expr`, `walk_expr_spans`, `walk_stmt_spans` |
 | `src/nod-macro/src/lib.rs` | 1848–1908 | Phase G: `collect_and_expand` convenience driver; smoke tests |
-| `src/nod-dylan/dylan-sources/stdlib.dylan` | 464–586 | The stdlib macros: `for-each`, `unless`, `when`, `cond`, `with-cleanup` |
+| `stdlib/*.dylan` | 464–586 | The stdlib macros: `for-each`, `unless`, `when`, `cond`, `with-cleanup` |
 
 ## See also
 

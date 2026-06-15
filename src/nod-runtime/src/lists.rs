@@ -1,5 +1,5 @@
 //! **Stdlib boundary**: new list APIs go in
-//! `src/nod-dylan/dylan-sources/stdlib.dylan`, not here. This file
+//! `stdlib/*.dylan`, not here. This file
 //! hosts the `<pair>` allocation primitive and head/tail accessors.
 //! Higher-level list operations (map, fold, reverse, take, drop, …)
 //! belong in Dylan. See `docs/STDLIB_BOUNDARY.md`.
