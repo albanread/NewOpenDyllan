@@ -567,6 +567,15 @@ unsafe fn invoke_rest_closure(f: Word, actual_args: &[u64]) -> u64 {
         None
     };
 
+    // 4b. Read the body code pointer NOW, while `f` is still valid. `f` is a
+    //     raw Word on the Rust stack (NOT a rooted slot), so the moving GC
+    //     triggered by the `nod_make_sov_len` allocation below would leave it
+    //     stale — reading `code_ptr_or_panic(f)` afterwards yields a moved-from
+    //     (often null) code pointer and jumps to 0x0. The code address itself
+    //     lives in the JIT/AOT code region (never relocated by the GC), so it is
+    //     safe to capture here and use after the allocation.
+    let code = code_ptr_or_panic(f);
+
     // 5. Allocate the rest SOV holding the (N - F) trailing actuals.
     //    GC MAY RUN HERE — every live Word we still need is rooted.
     let rest_len = n - fixed;
@@ -596,8 +605,8 @@ unsafe fn invoke_rest_closure(f: Word, actual_args: &[u64]) -> u64 {
     }
     body_args[fixed] = _rest_guard.reload().raw();
 
-    // 8. Dispatch on (F + 1) and env presence via the shared table.
-    let code = code_ptr_or_panic(f);
+    // 8. Dispatch on (F + 1) and env presence via the shared table. `code`
+    //    was captured in step 4b before the allocation (see the note there).
     let env_ptr = match &env_guard {
         Some(g) => g.reload().raw(),
         None => 0,
