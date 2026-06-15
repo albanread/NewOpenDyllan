@@ -120,6 +120,10 @@ const STDLIB_FILES: &[(&str, &str)] = &[
         include_str!("../../nod-dylan/dylan-sources/stdlib/arrays.dylan"),
     ),
     (
+        "stdlib/system-classes.dylan",
+        include_str!("../../nod-dylan/dylan-sources/stdlib/system-classes.dylan"),
+    ),
+    (
         "stdlib/strings.dylan",
         include_str!("../../nod-dylan/dylan-sources/stdlib/strings.dylan"),
     ),
