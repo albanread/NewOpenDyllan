@@ -139,34 +139,41 @@ or a standing design trade-off are kept here.
 * **Scope**: small.
 * **Status**: open.
 
-## `define test`/`define suite` keyword (property-list) heads don't expand
+## `define test`/`define suite` keyword (property-list) heads don't expand — RESOLVED (2026-06-15)
 
-* **Symptom**: testworks heads its tests with a keyword property list —
-  `define test foo (description: "...") … end`, `(title: "...")`,
-  `(expected-failure?: #t)`, `(when: method () … end)`. These fail: the test/suite
-  macro doesn't expand, so the test function is never defined ("unknown callee").
-  Affects ~24 corpus test files. A NON-keyword paren head (`(foo)`, `(a, b)`,
-  `(x :: <integer>)`) DOES work once a `?opts:parameter-list` rule is added — the
-  macro matcher's `ParameterList` kind matches ANY paren `Fragment::Group`,
-  keyword content included. The blocker is upstream of the macro layer.
-* **Root cause (traced 2026-06-14)**: `parse_module_with_macros_rust` returns
-  `Err` if ANY `parse_top_item` errors. For a keyword head, a parse pass parses the
-  head as an EXPRESSION and aborts at the `KeywordColon` (`unexpected token
-  KeywordColon`, parse_atom in `parser.rs`) — even though `parse_define_other`
-  itself token-skips the head cleanly and returns a well-formed `DefineOther`. The
-  module-level `Err` makes the whole pipeline bail BEFORE macro expansion runs, so
-  the test is never expanded.
-* **Note on ROI**: fixing this alone yields ~0 corpus *compile* gain — those files
-  have independent downstream blockers (`<bit-vector>`, parser features, etc.).
-  It's a correctness/foundation fix (the test macro should accept real testworks
-  shapes), not a metric mover.
-* **Planned fix**: ensure a definition-macro head is never expression-parsed at the
-  module level (token-skip only, as `parse_define_other` already does) so keyword
-  property lists don't trip parse_atom; then add the `?opts:parameter-list` rule to
-  `test`/`suite`/`benchmark`. (Two agents mis-fixed this with
-  `?opts:parameter-list` alone, which can't help while the parse still aborts.)
-* **Scope**: medium (`src/nod-reader/src/parser.rs` parse path + the stdlib macros).
-* **Status**: open.
+* **Symptom (was)**: testworks heads its tests with a keyword property list —
+  `define test foo (description: "...") … end`, `(expected-to-fail-reason: "...")`,
+  etc. These appeared to fail: the test function was never defined ("unknown
+  callee foo").
+* **Real root cause (traced 2026-06-15)**: TWO things, and the previously-recorded
+  "module-level parse aborts at `KeywordColon` in parse_atom" diagnosis was itself
+  an artifact, not the cause:
+  1. **The macro rule was too narrow.** Rule 1 was the literal `{ define test
+     ?name:name () ?body:body end }`; a keyword head `(description: "...")` doesn't
+     match `()`, so it fell through to rule 2 (`define test ?name:name ?body:body
+     end`), which then tried to parse `(description: "...")` as the start of the
+     BODY → `KeywordColon` in expression position → parse error. The fix is simply
+     to generalise rule 1's head to `?opts:parameter-list` (the matcher's
+     `ParameterList` kind matches ANY paren `Fragment::Group`, incl. keyword
+     content); the head is then token-skipped and discarded, never
+     expression-parsed. **No parser change was needed.**
+  2. **The investigation fixtures were malformed.** They had no blank line after
+     the `Module:` header. `scan_preamble` treats any line containing `key:` as a
+     header entry, so `define test foo (description: "x")` (the `description:`
+     colon) was swallowed INTO the preamble; the lexer skipped it and the parser
+     began at the dangling `end test;` → `unexpected token KwEnd`, and `foo` was
+     never defined. A `(bar)` head (no colon) wasn't swallowed — which is exactly
+     why `(bar)` "worked" and the keyword head looked categorically broken. With a
+     well-formed header the keyword head parses, expands, and the function is real.
+* **Fix shipped**: one line in `stdlib/macros.dylan` — `define test`'s head rule
+  `()` → `?opts:parameter-list` (commit a4ba2dc). Strictly more permissive (every
+  old `()` head still matches); build+run verified `define test foo (description:
+  "x") format-out("%d\n",42); end` + `main foo()` → prints **42** (callable, not
+  hollow). Corpus dump-dfm 71 → 74 (collections.dylan, test-functional.dylan,
+  recursive-locks.dylan), all emitting real `fn`s.
+* **Lesson**: always test corpus-shaped fixtures with a real `Module:` header AND a
+  blank line; a missing blank line silently routes code into the preamble and
+  produces misleading "parse abort" symptoms.
 
 ## Cold-build AOT EXE link `LNK2005 nod_user_main` — RESOLVED (2026-06-14)
 
