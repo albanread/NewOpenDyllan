@@ -9155,10 +9155,19 @@ fn desugar_numeric_for(
     let mut next_temps: Vec<Statement> = Vec::new();
     let mut assigns: Vec<Statement> = Vec::new();
 
+    // Top-of-iteration `let` rebindings (one per `in`-collection clause):
+    // `let var = %fip-current-element(state)`. These MUST come before the
+    // user body each iteration so the loop variable holds the current
+    // element. The FIP `%fip-advance!(state)` step is appended to
+    // `assigns` (end of iteration), composing with numeric/step assigns.
+    let mut head_lets: Vec<Statement> = Vec::new();
+
     // Counter so each step clause gets a unique temp name for its
     // parallel next-value. Names use a sigil-prefixed form that cannot
     // collide with a source identifier.
     let mut next_idx = 0usize;
+    // Counter so each `in`-collection clause gets a unique FIP-state temp.
+    let mut fip_idx = 0usize;
 
     for clause in clauses {
         match clause {
@@ -9273,10 +9282,59 @@ fn desugar_numeric_for(
                     operand: Box::new(cond.clone()),
                 });
             }
-            ForClause::In { .. } => {
-                return Err(bail("`in`-collection clause unsupported"));
+            ForClause::In { var, coll, .. } => {
+                // `var in coll` — forward-iteration protocol. One FIP
+                // state per in-clause; mirrors the `for-each` macro shape
+                // but composes with the other clauses' tests/steps and
+                // supports parallel `in` (stop at the shortest collection):
+                //   before: let %state = %fip-init(coll);
+                //   test:   ~ %fip-finished?(%state)   (ANDed with others)
+                //   head:   let var = %fip-current-element(%state);
+                //   end:    %fip-advance!(%state)
+                let state_name = format!("__for_fip_{fip_idx}");
+                fip_idx += 1;
+                let state_ident = Expr::Ident(span, state_name.clone());
+
+                // Pre-loop: let %state = %fip-init(coll);
+                lets.push(Statement::Let {
+                    span,
+                    binders: vec![Binder { span, name: state_name.clone(), type_: None }],
+                    rest: None,
+                    value: fip_call(span, "%fip-init", coll.clone()),
+                });
+
+                // Continuation test: ~ %fip-finished?(%state).
+                tests.push(Expr::UnOp {
+                    span,
+                    op: UnOp::Not,
+                    operand: Box::new(fip_call(
+                        span,
+                        "%fip-finished?",
+                        state_ident.clone(),
+                    )),
+                });
+
+                // Top of iteration: let var = %fip-current-element(%state).
+                head_lets.push(Statement::Let {
+                    span,
+                    binders: vec![Binder { span, name: var.clone(), type_: None }],
+                    rest: None,
+                    value: fip_call(span, "%fip-current-element", state_ident.clone()),
+                });
+
+                // End of iteration: %fip-advance!(%state). Advancing the
+                // state is independent of the loop variables, so it joins
+                // `assigns` directly (no parallel-step temp needed).
+                assigns.push(Statement::Expr(fip_call(
+                    span,
+                    "%fip-advance!",
+                    state_ident,
+                )));
             }
             ForClause::Keyed { .. } => {
+                // `var keyed-by key in coll` needs a `%fip-current-key`
+                // primitive that the runtime doesn't yet export; bail
+                // cleanly rather than emit a half-correct loop.
                 return Err(bail("`keyed-by` clause unsupported"));
             }
         }
@@ -9291,9 +9349,12 @@ fn desugar_numeric_for(
         None => return Err(bail("loop has no termination test (need `to`/`below`/`above`/`while:`/`until:`)")),
     };
 
-    // Loop body = user body, then the parallel next-value temps, then the
-    // assignments back to the iteration variables.
-    let mut while_body: Vec<Statement> = body.to_vec();
+    // Loop body = `in`-clause element rebindings (top of iteration), then
+    // the user body, then the parallel next-value temps, then the
+    // assignments back to the iteration variables (which include each
+    // in-clause's `%fip-advance!`).
+    let mut while_body: Vec<Statement> = head_lets;
+    while_body.extend(body.iter().cloned());
     while_body.extend(next_temps);
     while_body.extend(assigns);
 
@@ -9313,6 +9374,19 @@ fn desugar_numeric_for(
         out.extend(finally_.iter().cloned());
     }
     Ok(out)
+}
+
+/// Build a one-argument call to a FIP primitive (`%fip-init`,
+/// `%fip-finished?`, `%fip-current-element`, `%fip-advance!`). These
+/// resolve to the registered primitives (see the `PRIM`-style table near
+/// the top of this module) which lower to the `nod_fip_*` runtime
+/// entry points.
+fn fip_call(span: Span, prim: &str, arg: Expr) -> Expr {
+    Expr::Call {
+        span,
+        callee: Box::new(Expr::Ident(span, prim.to_string())),
+        args: vec![arg],
+    }
 }
 
 /// Helper for [`desugar_numeric_for`]: register a parallel step for
@@ -10759,6 +10833,127 @@ mod for_desugar_tests {
         let Statement::While { cond, .. } = &out[1] else { panic!() };
         // `while: i <= 4` is used directly (not negated).
         assert!(matches!(cond, Expr::BinOp { op: BinOp::Le, .. }));
+    }
+
+    fn in_clause(var: &str, coll: Expr) -> ForClause {
+        ForClause::In { span: sp(), var: var.to_string(), coll }
+    }
+
+    /// `is this a one-arg call to the named FIP primitive?`
+    fn is_fip_call(e: &Expr, name: &str) -> bool {
+        matches!(e, Expr::Call { callee, args, .. }
+            if matches!(callee.as_ref(), Expr::Ident(_, n) if n == name)
+                && args.len() == 1)
+    }
+
+    #[test]
+    fn in_clause_lowers_to_fip_protocol() {
+        // `for (x in c) body end` →
+        //   let %state = %fip-init(c);
+        //   while (~ %fip-finished?(%state)) {
+        //     let x = %fip-current-element(%state);
+        //     body; %fip-advance!(%state)
+        //   };
+        //   #f
+        let clauses = vec![in_clause("x", ident("c"))];
+        let body = vec![Statement::Expr(ident("body"))];
+        let out = desugar_numeric_for(sp(), &clauses, &body, &[]).unwrap();
+        // Pre-loop let = %fip-init(c).
+        let Statement::Let { value, .. } = &out[0] else {
+            panic!("expected fip-init let, got {:?}", out[0]);
+        };
+        assert!(is_fip_call(value, "%fip-init"), "init: {value:?}");
+        // While cond = ~ %fip-finished?(state).
+        let Statement::While { cond, body: wbody, .. } = &out[1] else {
+            panic!("expected while, got {:?}", out[1]);
+        };
+        let Expr::UnOp { op: UnOp::Not, operand, .. } = cond else {
+            panic!("cond must be `~ finished?`, got {cond:?}");
+        };
+        assert!(is_fip_call(operand, "%fip-finished?"), "cond: {operand:?}");
+        // First body stmt: `let x = %fip-current-element(state)` (top of iter).
+        let Statement::Let { binders, value, .. } = &wbody[0] else {
+            panic!("body[0] must be element rebind let, got {:?}", wbody[0]);
+        };
+        assert_eq!(binders[0].name, "x");
+        assert!(is_fip_call(value, "%fip-current-element"), "elem: {value:?}");
+        // The user body comes after the rebind.
+        assert!(matches!(&wbody[1], Statement::Expr(Expr::Ident(_, n)) if n == "body"));
+        // Last body stmt: `%fip-advance!(state)`.
+        let last = wbody.last().unwrap();
+        assert!(matches!(last, Statement::Expr(e) if is_fip_call(e, "%fip-advance!")));
+    }
+
+    #[test]
+    fn parallel_in_clauses_get_distinct_states_and_conjoined_tests() {
+        // `for (x in c1, y in c2) end` → two fip-init lets, while cond is
+        // `~finished?(s0) & ~finished?(s1)`, two element rebinds, two
+        // advances. Parallel iteration stops at the shortest collection
+        // because EITHER finished? short-circuits the conjunction.
+        let clauses = vec![in_clause("x", ident("c1")), in_clause("y", ident("c2"))];
+        let out = desugar_numeric_for(sp(), &clauses, &[], &[]).unwrap();
+        assert!(matches!(&out[0], Statement::Let { value, .. } if is_fip_call(value, "%fip-init")));
+        assert!(matches!(&out[1], Statement::Let { value, .. } if is_fip_call(value, "%fip-init")));
+        let Statement::While { cond, body: wbody, .. } = &out[2] else { panic!() };
+        // cond is an `&` of two `~finished?` tests.
+        assert!(matches!(cond, Expr::BinOp { op: BinOp::And, .. }), "cond: {cond:?}");
+        // two element rebinds (x, y) at the top of the body.
+        let elem_binds: Vec<_> = wbody
+            .iter()
+            .filter_map(|s| match s {
+                Statement::Let { binders, value, .. }
+                    if is_fip_call(value, "%fip-current-element") =>
+                {
+                    Some(binders[0].name.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(elem_binds, vec!["x".to_string(), "y".to_string()]);
+        // two advances at the end.
+        let advances = wbody
+            .iter()
+            .filter(|s| matches!(s, Statement::Expr(e) if is_fip_call(e, "%fip-advance!")))
+            .count();
+        assert_eq!(advances, 2);
+    }
+
+    #[test]
+    fn in_clause_composes_with_numeric_and_finally() {
+        // `for (i from 1 to 9, x in c) body finally R end` — the numeric
+        // `to` test and the in-clause `~finished?` are both present, and
+        // the finally result is the trailing statement.
+        let clauses = vec![
+            numeric("i", int(1), Some(int(9)), None),
+            in_clause("x", ident("c")),
+        ];
+        let body = vec![Statement::Expr(ident("body"))];
+        let finally_ = vec![Statement::Expr(ident("R"))];
+        let out = desugar_numeric_for(sp(), &clauses, &body, &finally_).unwrap();
+        // Find the while; its cond conjoins `i <= 9` with `~finished?`.
+        let while_stmt = out.iter().find_map(|s| match s {
+            Statement::While { cond, body, .. } => Some((cond, body)),
+            _ => None,
+        });
+        let (cond, _) = while_stmt.expect("a while stmt");
+        assert!(matches!(cond, Expr::BinOp { op: BinOp::And, .. }), "cond: {cond:?}");
+        // finally → trailing `R`.
+        let last = out.last().unwrap();
+        assert!(matches!(last, Statement::Expr(Expr::Ident(_, n)) if n == "R"));
+    }
+
+    #[test]
+    fn keyed_clause_still_unsupported() {
+        // `keyed-by` needs a `%fip-current-key` primitive the runtime
+        // doesn't export yet — must bail cleanly, not lower wrongly.
+        let clauses = vec![ForClause::Keyed {
+            span: sp(),
+            var: "v".to_string(),
+            key: "k".to_string(),
+            coll: ident("c"),
+        }];
+        let err = desugar_numeric_for(sp(), &clauses, &[], &[]).unwrap_err();
+        assert!(matches!(err, LoweringError::Unsupported { .. }));
     }
 }
 
