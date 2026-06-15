@@ -352,14 +352,21 @@ end macro;
 // ─── testworks define test / define suite (minimal) ──────────────────────────
 //
 // Definition macros for the testworks harness (a separate package, not vendored
-// in the reference tree). `define test NAME () body end` becomes a plain
+// in the reference tree). `define test NAME (HEAD) body end` becomes a plain
 // `define function`; `define suite NAME () … end` becomes a no-op function (the
 // suite's `test`/`suite` listing is dropped — running suites needs a real
 // runner). Enough to compile test bodies past the harness wrapper. The
 // `check-*` helpers used inside test bodies live in collections.dylan.
+//
+// The head is `?opts:parameter-list` (any `(…)` group), so it accepts both the
+// bare `()` form AND testworks keyword-property-list heads like
+// `(description: "…")` / `(expected-to-fail-reason: "…")`; the options are
+// metadata, not parameters, so they are discarded. The expansion always emits a
+// nullary function (`define function NAME () body end`) — the test function is
+// real and CALLABLE (build+run verified), never silently dropped.
 
 define macro test
-  { define test ?name:name () ?body:body end }
+  { define test ?name:name ?opts:parameter-list ?body:body end }
     => { define function ?name () ?body end }
   { define test ?name:name ?body:body end }
     => { define function ?name () ?body end }

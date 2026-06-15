@@ -12,7 +12,7 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 71 / 161 | … → 63 (DRM classes) → 71 (DRM classes batch-2) |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 74 / 161 | … → 63 (DRM classes) → 71 (DRM classes batch-2) → 74 (testworks keyword-head `define test`) |
 | OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
@@ -20,6 +20,42 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 ## Iterations
 
 *(newest first)*
+
+### 2026-06-15 — Iteration 23: keyword-head `define test` is NOT hollow — corpus 71 → 74
+
+- **The Iteration-22 "hollow keyword-head" verdict was WRONG — a malformed-fixture
+  artifact.** Re-applied the one-line generalization in `macros.dylan`:
+  `{ define test ?name:name () ?body:body end }` → `{ define test ?name:name
+  ?opts:parameter-list ?body:body end }`. This lets `define test NAME (description:
+  "…")` / `(expected-to-fail-reason: "…")` heads expand to `define function NAME ()
+  body end`, with the property-list discarded (metadata, not parameters).
+- **Root cause of the false "hollow" reading (full parser trace).** The iter-22 test
+  fixture had NO blank line after `Module: t`. `scan_preamble` treats any line
+  containing `key:` as a header entry, so `define test foo (description: "x")` (the
+  `description:` inside the head) was swallowed INTO the preamble; the lexer then
+  skipped it and the parser started at the dangling `end test;` → "unexpected KwEnd",
+  and `foo` was never defined → the caller's "unknown callee foo". A `(bar)` head (no
+  colon) was NOT swallowed, which is why it "worked" and the keyword head looked
+  broken. With a proper blank-line header the keyword head parses, expands, and the
+  function is real and callable. `parse_define_other` token-skips any `(…)` head fine;
+  the matcher (`ParameterList` → any `Fragment::Group{Paren}`) matches `()` AND
+  `(key: val)`. The change is strictly MORE permissive — every old `()` head still
+  matches — so it cannot regress.
+- **Build+run proof it is NOT hollow.** `define test foo (description: "x")
+  format-out("%d\n", 42); end test;` + `main foo()` → `--parse-with-rust build` →
+  **runs, prints 42**. The 3 newly-passing corpus files emit the test functions as
+  REAL `fn`s (collections.dylan 23 `fn`s, test-functional.dylan 9 `fn`s incl. all 7
+  `compose-0`…`always-0`, recursive-locks) — nothing dropped.
+- **Delta (proven by stash/rebuild before-vs-after):** `dylan/tests/collections.dylan`
+  (`(expected-to-fail-reason: …)` heads), `dylan/apple-dylan-test-suite/test-functional.dylan`
+  (`(description: "")` heads), `common-dylan/tests/threads/recursive-locks.dylan`.
+- **Note (separate stdlib gap, not a macro defect):** native `build` of
+  test-functional additionally needs `disjoin`/`conjoin` (variadic functional
+  combinators) in the stdlib — codegen fails LOUDLY (`unknown callee disjoin`), not
+  silently; dump-dfm legitimately passes (the IR is correct). Deferred to the
+  functional-stdlib work / the running spread-apply (`apply` + N-ary compose/curry).
+- **Gates:** eval `1+1`=2, in-tree 55/55 on BOTH parser paths, smoke-aot 6/6, corpus
+  71 → **74**.
 
 ### 2026-06-15 — Iteration 22: `for (var in collection)` lowering; reverted a hollow testworks fix
 
