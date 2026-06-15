@@ -21,6 +21,32 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 
 *(newest first)*
 
+### 2026-06-15 — Iteration 16: stdlib extension (workflow: sequences + numbers + collections)
+
+A 3-agent workflow (one worktree per category), each build+run-verified by me on main.
+
+- **sequences.dylan** (+10): `copy-sequence`, `fill!`, `position`, `count`,
+  `find-element`, `remove-duplicates`/`!`, `intersection`, `difference`, `union`.
+- **numbers.dylan** (NEW, +25): `abs`, `negative`, `quotient`/`remainder`/`modulo`,
+  the `truncate`/`floor`/`ceiling`/`round` families (+ two-value `…/` forms), `gcd`,
+  `lcm`, `expt`/`power`, `logand`/`logior`/`logxor`/`lognot`/`ash`/`logbit?`/
+  `integer-length` (over the bit-vector word primitives). Float-only rounding +
+  variadic `#rest` forms deferred (no float path / `#rest` binding).
+- **collections.dylan** (+5 kept): `key-sequence` (+ `<table>`), `key-test`,
+  `element-or-default` (+ `<table>`), `copy`, `map-into`.
+- **Dedup:** the sequences and collections agents independently added the same five
+  (`copy-sequence`/`fill!`/`find-element`/`remove-duplicates`/`!`); removed the
+  collections copies (kept in sequences) so the loader gets one `<object>` method each.
+- **Verified:** `gcd(12,18)=6`, `abs(-5)=5`, `expt(2,10)=1024`, `logand(12,10)=8`,
+  `union` size 5, `copy-sequence`/`key-sequence` correct (build+run); in-tree 55/55
+  both paths (shim re-baked for the new file), smoke-aot 6/6, corpus 60/161 unchanged
+  (stdlib additions add availability; corpus files fail on other downstream gaps).
+- **Discovered (separate, pre-existing):** `eval '<expr>'` returns `<eval-entry>
+  missing after lowering` — verified broken at the 9a25d96 baseline too (NOT caused
+  by this extension); a regression earlier in the session (macros/collection-classes
+  compiler-code era). The production path (`build` → exe, `dump-dfm`) is unaffected.
+  Being investigated next.
+
 ### 2026-06-15 — Iteration 15: stdlib strings + select/case + collection classes (3 parallel agents)
 
 Three agents in parallel worktrees (disjoint files), each build+run-verified by me on
