@@ -21,6 +21,33 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 
 *(newest first)*
 
+### 2026-06-15 — Iteration 24: `apply` spread + N-ary `compose`/`curry`/`rcurry` (merged agent)
+
+- **Merged the spread-apply agent** (`0b5f34c`): `apply(fn, arg…, last-seq)` wires the
+  Dylan front door to the runtime's `nod_apply` (which already dispatched on the SOV's
+  runtime length, 0..8 = `MAX_APPLY_ARITY`); it collects post-`fn` actuals with `#rest`,
+  builds one `<simple-object-vector>` = leading-args ++ spread-final-seq (via FIP, so
+  list/vector/range all spread), and hands it off. N-ary `compose` (right-to-left fold),
+  multi-arg `curry`/`rcurry` built on it. Over-cap (>8) → clean
+  `<wrong-number-of-arguments-error>`, not UB.
+- **Cross-module `#rest` fix (the real work):** `#rest` collection is a call-site rewrite,
+  but the per-module `TopNames.rest_fns` didn't see stdlib `#rest` callees, so user code
+  calling `apply`/`curry`/… passed the raw sequence through and crashed. Added a
+  process-global `#rest`-callee registry in `nod-runtime/src/dispatch.rs`
+  (`register_rest_callee`/`rest_callee_fixed_count`), taught `collect_top_level_names` to
+  record `#rest` `define method`s, and made the `rest_fixed_count` call-site branch
+  DISPATCH when the callee is a generic.
+- **Independently verified on a clean merged build (not trusting the self-report):**
+  real AOT exe printed `apply(\+,#(3,4))`=7, `apply(\+,3,#(4))`=7, `apply(add3,#(1,2,3))`=6,
+  `compose(inc,double,inc)(5)`=13, `curry(\+,1)(2)`=3, `curry(add3,1,2)(3)`=6,
+  `rcurry(\-,1)(10)`=9. Gates: eval=2, in-tree 55/55 BOTH paths, smoke-aot 6/6,
+  nod-sema 48/0, corpus 74/161 (unchanged — capability, not a compile-count mover yet).
+  nod-runtime full-suite 148/2: the 2 (`range_reduce_sum`, `stretchy_vector_push_and_size`)
+  are PRE-EXISTING global-class-id-drift flakes (fail in full-suite ordering on pre-merge
+  main too; pass in isolation) — confirmed by reverting the agent's runtime files.
+- **Note:** call-site-variadic `compose`d closures (composite called with several args)
+  still need `#rest` on lifted closures — not collected yet; documented in functional.dylan.
+
 ### 2026-06-15 — Iteration 23: keyword-head `define test` is NOT hollow — corpus 71 → 74
 
 - **The Iteration-22 "hollow keyword-head" verdict was WRONG — a malformed-fixture
