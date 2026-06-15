@@ -3095,7 +3095,17 @@ pub fn format_sema_model(model: &SemaModel) -> String {
             TypeEstimate::Class(id) => format!("Class({})", sema_class_name(ClassId(*id))),
             other => format!("{other:?}"),
         };
-        let _ = writeln!(s, "fn {name} arity={arity} return={ret}");
+        // Sprint 60: a function declared with `#rest` carries a trailing
+        // ` rest=FIXED` token (FIXED = pre-`#rest` param count) so the
+        // dump round-trip preserves the call-site collection metadata.
+        match model.top_names.rest_fns.get(name) {
+            Some(fixed) => {
+                let _ = writeln!(s, "fn {name} arity={arity} return={ret} rest={fixed}");
+            }
+            None => {
+                let _ = writeln!(s, "fn {name} arity={arity} return={ret}");
+            }
+        }
     }
     let mut consts: Vec<&String> = model.top_names.constants.iter().collect();
     consts.sort();
@@ -3187,6 +3197,7 @@ pub fn parse_sema_dump(
     let mut fn_arity: HashMap<String, usize> = HashMap::new();
     let mut constants: HashSet<String> = HashSet::new();
     let mut variables: HashSet<String> = HashSet::new();
+    let mut rest_fns: HashMap<String, usize> = HashMap::new();
     let mut generics: Vec<String> = Vec::new();
     let mut sealed_classes: HashSet<String> = HashSet::new();
     let mut sealed_generics: HashSet<String> = HashSet::new();
@@ -3207,7 +3218,18 @@ pub fn parse_sema_dump(
             let arity: usize = after[..ret_at]
                 .parse()
                 .map_err(|_| format!("bad arity in: {line}"))?;
-            let est_str = &after[ret_at + " return=".len()..];
+            let mut est_str = &after[ret_at + " return=".len()..];
+            // Sprint 60: optional trailing ` rest=FIXED` token (see
+            // `format_sema_model`). Split it off the return estimate.
+            if let Some(rest_at) = est_str.find(" rest=") {
+                let fixed_str = &est_str[rest_at + " rest=".len()..];
+                let fixed: usize = fixed_str
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("bad rest= in: {line}"))?;
+                rest_fns.insert(name.clone(), fixed);
+                est_str = &est_str[..rest_at];
+            }
             fns.insert(name.clone(), est_from_dump(est_str));
             fn_arity.insert(name, arity);
         } else if let Some(name) = line.strip_prefix("constant ") {
@@ -3251,6 +3273,7 @@ pub fn parse_sema_dump(
         fn_arity,
         constants,
         variables,
+        rest_fns,
     };
     let sealing = crate::optimise::SealingFacts {
         domains,
@@ -5046,6 +5069,16 @@ pub struct TopNames {
     /// preserve the GAP-002 bareword path; `is_variable` differentiates
     /// for `lower_assign`.
     variables: HashSet<String>,
+    /// Sprint 60: top-level functions that take a `#rest` parameter.
+    /// Maps the function name to its FIXED (required + `#key`) param
+    /// count — the number of positional slots that precede the `#rest`
+    /// slot in the callee ABI. A `#rest` callee is lowered with exactly
+    /// `fixed + 1` LLVM params: the `fixed` leading args, then ONE final
+    /// slot holding a freshly-built `<simple-object-vector>` of the
+    /// trailing actuals. The call site (`DirectCall` lowering) consults
+    /// this map to bundle args > `fixed` into that SOV before emitting
+    /// the call, keeping the fixed-arity LLVM ABI intact (no varargs).
+    rest_fns: HashMap<String, usize>,
 }
 
 impl TopNames {
@@ -5055,7 +5088,15 @@ impl TopNames {
             fn_arity: HashMap::new(),
             constants: HashSet::new(),
             variables: HashSet::new(),
+            rest_fns: HashMap::new(),
         }
+    }
+    /// Sprint 60: if `name` is a top-level function declared with a
+    /// `#rest` parameter, returns its FIXED (pre-`#rest`) param count.
+    /// Call-site lowering uses this to bundle the trailing actuals into
+    /// the `#rest` SOV slot.
+    pub fn rest_fixed_count(&self, name: &str) -> Option<usize> {
+        self.rest_fns.get(name).copied()
     }
     pub fn contains(&self, name: &str) -> bool {
         self.fns.contains_key(name)
@@ -5213,6 +5254,18 @@ fn param_binding_name(name: &str) -> Option<&str> {
         return None;
     }
     Some(name)
+}
+
+/// Sprint 60: if `params` contains a `#rest var` parameter, return its
+/// 0-based index in the param list (= the number of FIXED positional
+/// slots preceding it). The loose parser stores the rest param as the
+/// string `"#rest var"`. Returns `None` when there is no `#rest`.
+///
+/// The index doubles as the "fixed param count" used by the call site:
+/// args at positions `[0, idx)` map to the leading ABI slots and args
+/// at `[idx, …)` are collected into the SOV that fills the rest slot.
+fn rest_param_index(params: &[Param]) -> Option<usize> {
+    params.iter().position(|p| p.name.starts_with("#rest "))
 }
 
 // ─── Sprint 21 / 24: anonymous-method lifting pre-pass ────────────────────
@@ -5937,6 +5990,7 @@ fn collect_top_level_names(m: &Module, user_classes: &HashMap<String, ClassId>) 
     let mut fn_arity: HashMap<String, usize> = HashMap::new();
     let mut constants: HashSet<String> = HashSet::new();
     let mut variables: HashSet<String> = HashSet::new();
+    let mut rest_fns: HashMap<String, usize> = HashMap::new();
     for item in &m.items {
         match item {
             Item::DefineFunction { name, params, return_, .. } => {
@@ -5947,6 +6001,12 @@ fn collect_top_level_names(m: &Module, user_classes: &HashMap<String, ClassId>) 
                     .unwrap_or(TypeEstimate::Top);
                 fns.insert(name.clone(), ret);
                 fn_arity.insert(name.clone(), params.len());
+                // Sprint 60: record the fixed (pre-`#rest`) param count so
+                // call-site lowering can collect the trailing actuals into
+                // the rest SOV slot.
+                if let Some(fixed) = rest_param_index(params) {
+                    rest_fns.insert(name.clone(), fixed);
+                }
             }
             // A 0-parameter `define method` is lowered as a plain
             // direct-call function (see `lower_method_item`), so it must
@@ -6048,6 +6108,7 @@ fn collect_top_level_names(m: &Module, user_classes: &HashMap<String, ClassId>) 
         fn_arity,
         constants,
         variables,
+        rest_fns,
     }
 }
 
@@ -6963,6 +7024,71 @@ impl FunctionBuilder {
         dst
     }
 
+    /// Sprint 60: allocate a fresh `<simple-object-vector>` of length
+    /// `elems.len()` (via `nod_make_sov_len`) and install each element
+    /// through `nod_sov_element_setter`. Returns the SOV temp. The
+    /// element temps MUST already be lowered (so no GC during element
+    /// lowering can strand a half-built SOV). Shared by the `#[…]`
+    /// vector-literal path and the `#rest` argument-collection path.
+    fn emit_build_sov(&mut self, elems: &[TempId]) -> TempId {
+        let len_t = self.fresh_temp(TypeEstimate::Integer);
+        self.push(Computation::Const {
+            dst: len_t,
+            value: ConstValue::Integer(elems.len() as i128),
+        });
+        let sov_t = self.fresh_temp(TypeEstimate::Class(
+            nod_runtime::ClassId::SIMPLE_OBJECT_VECTOR.0,
+        ));
+        self.push(Computation::DirectCall {
+            dst: sov_t,
+            callee: "nod_make_sov_len".to_string(),
+            args: vec![len_t],
+            safepoint_roots: Vec::new(),
+            is_no_alloc: false,
+        });
+        for (i, &elt) in elems.iter().enumerate() {
+            let i_t = self.fresh_temp(TypeEstimate::Integer);
+            self.push(Computation::Const {
+                dst: i_t,
+                value: ConstValue::Integer(i as i128),
+            });
+            let _ = self.emit_sov_element_setter(elt, sov_t, i_t);
+        }
+        sov_t
+    }
+
+    /// Sprint 60: build a proper `<list>` from `elems` — a right-nested
+    /// `%pair-alloc(e0, %pair-alloc(e1, … %nil()))` chain. Empty `elems`
+    /// yields `%nil()` (the canonical `<empty-list>`). Element temps MUST
+    /// already be lowered. Shared by the `#(…)` list-literal path and the
+    /// variadic `list(…)` call-site form.
+    fn emit_build_list(&mut self, elems: &[TempId]) -> TempId {
+        let mut tail = self.fresh_temp(TypeEstimate::Class(
+            nod_runtime::ClassId::EMPTY_LIST.0,
+        ));
+        self.push(Computation::DirectCall {
+            dst: tail,
+            callee: "%nil".to_string(),
+            args: Vec::new(),
+            safepoint_roots: Vec::new(),
+            is_no_alloc: false,
+        });
+        for &elt in elems.iter().rev() {
+            let pair_dst = self.fresh_temp(TypeEstimate::Class(
+                nod_runtime::ClassId::PAIR.0,
+            ));
+            self.push(Computation::DirectCall {
+                dst: pair_dst,
+                callee: "%pair-alloc".to_string(),
+                args: vec![elt, tail],
+                safepoint_roots: Vec::new(),
+                is_no_alloc: false,
+            });
+            tail = pair_dst;
+        }
+        tail
+    }
+
     /// Sprint 21: emit a `nod_make_function_ref(name_bytestring,
     /// arity_fixnum)` call. The result is a pointer-tagged `<function>`
     /// Word; the underlying instance lives in the static area so the
@@ -7330,49 +7456,40 @@ impl FunctionBuilder {
         if let Expr::Ident(_, name) = callee
             && name == "#list"
         {
-            // Empty list literal: just `nil`.
-            if args.is_empty() {
-                let dst = self.fresh_temp(TypeEstimate::Class(
-                    nod_runtime::ClassId::EMPTY_LIST.0,
-                ));
-                self.push(Computation::DirectCall {
-                    dst,
-                    callee: "%nil".to_string(),
-                    args: Vec::new(),
-                    safepoint_roots: Vec::new(),
-                    is_no_alloc: false,
-                });
-                return Ok(dst);
-            }
-            // Lower each element to a temp, then build the chain
-            // right-to-left.
+            // Lower each element to a temp, then build the cons-chain
+            // right-to-left (empty `#()` bottoms out at `%nil`).
             let elem_temps: Vec<TempId> = args
                 .iter()
                 .map(|a| self.lower_expr(a, env, ctx))
                 .collect::<Result<_, _>>()?;
-            let mut tail = self.fresh_temp(TypeEstimate::Class(
-                nod_runtime::ClassId::EMPTY_LIST.0,
-            ));
-            self.push(Computation::DirectCall {
-                dst: tail,
-                callee: "%nil".to_string(),
-                args: Vec::new(),
-                safepoint_roots: Vec::new(), is_no_alloc: false,
-            });
-            for elt in elem_temps.into_iter().rev() {
-                let pair_dst = self.fresh_temp(TypeEstimate::Class(
-                    nod_runtime::ClassId::PAIR.0,
-                ));
-                self.push(Computation::DirectCall {
-                    dst: pair_dst,
-                    callee: "%pair-alloc".to_string(),
-                    args: vec![elt, tail],
-                    safepoint_roots: Vec::new(),
-                    is_no_alloc: false,
-                });
-                tail = pair_dst;
-            }
-            return Ok(tail);
+            return Ok(self.emit_build_list(&elem_temps));
+        }
+        // Sprint 60: variadic `list(a, b, c, …)` — the DRM N-ary list
+        // constructor, un-deferred by `#rest` collection. Built directly
+        // at the call site (any arity) as a `<list>`, bypassing the
+        // single-method stdlib `list` generic that only handled the
+        // 1-arg case. Mirrors the `#(…)` literal path. `list()` → `#()`.
+        if let Expr::Ident(_, name) = callee
+            && name == "list"
+        {
+            let elem_temps: Vec<TempId> = args
+                .iter()
+                .map(|a| self.lower_expr(a, env, ctx))
+                .collect::<Result<_, _>>()?;
+            return Ok(self.emit_build_list(&elem_temps));
+        }
+        // Sprint 60: variadic `vector(a, b, c, …)` — the DRM N-ary
+        // `<simple-object-vector>` constructor, un-deferred by `#rest`
+        // collection. Built directly at the call site (any arity) as an
+        // SOV, mirroring the `#[…]` literal path. `vector()` → empty SOV.
+        if let Expr::Ident(_, name) = callee
+            && name == "vector"
+        {
+            let elem_temps: Vec<TempId> = args
+                .iter()
+                .map(|a| self.lower_expr(a, env, ctx))
+                .collect::<Result<_, _>>()?;
+            return Ok(self.emit_build_sov(&elem_temps));
         }
         // Collection-classes lever: `#[a, b, c]` literal vectors. The
         // parser emits `Call(Ident("#vector"), [a, b, c])`. Lower as a
@@ -7392,30 +7509,35 @@ impl FunctionBuilder {
                 .iter()
                 .map(|a| self.lower_expr(a, env, ctx))
                 .collect::<Result<_, _>>()?;
-            let len_t = self.fresh_temp(TypeEstimate::Integer);
-            self.push(Computation::Const {
-                dst: len_t,
-                value: ConstValue::Integer(elem_temps.len() as i128),
-            });
-            let sov_t = self.fresh_temp(TypeEstimate::Class(
-                nod_runtime::ClassId::SIMPLE_OBJECT_VECTOR.0,
-            ));
-            self.push(Computation::DirectCall {
-                dst: sov_t,
-                callee: "nod_make_sov_len".to_string(),
-                args: vec![len_t],
-                safepoint_roots: Vec::new(),
-                is_no_alloc: false,
-            });
-            for (i, &elt) in elem_temps.iter().enumerate() {
-                let i_t = self.fresh_temp(TypeEstimate::Integer);
-                self.push(Computation::Const {
-                    dst: i_t,
-                    value: ConstValue::Integer(i as i128),
+            return Ok(self.emit_build_sov(&elem_temps));
+        }
+        // Sprint 60: N-ary `max(a, b, c, …)` / `min(…)` — the DRM
+        // variadic numeric extrema, un-deferred by `#rest` collection.
+        // Folded LEFT at the call site into a chain of binary calls
+        // (`max(max(a, b), c)…`), each reusing the existing 2-arg `max` /
+        // `min` generic via Dispatch. Only intercepts arity >= 3; the
+        // 0/1/2-arg forms (and the bareword `max` / `min` function value)
+        // fall through to the normal path unchanged.
+        if let Expr::Ident(_, name) = callee
+            && (name == "max" || name == "min")
+            && args.len() >= 3
+        {
+            let arg_temps: Vec<TempId> = args
+                .iter()
+                .map(|a| self.lower_expr(a, env, ctx))
+                .collect::<Result<_, _>>()?;
+            let mut acc = arg_temps[0];
+            for &next in &arg_temps[1..] {
+                let dst = self.fresh_temp(TypeEstimate::Top);
+                self.push(Computation::Dispatch {
+                    dst,
+                    generic_name: name.clone(),
+                    args: vec![acc, next],
+                    safepoint_roots: Vec::new(),
                 });
-                let _ = self.emit_sov_element_setter(elt, sov_t, i_t);
+                acc = dst;
             }
-            return Ok(sov_t);
+            return Ok(acc);
         }
         // Sprint 20b: `%`-prefixed primitive ops. Each entry in
         // `LOWER_PRIMITIVE_TABLE` lowers to a `DirectCall` against a
@@ -7667,6 +7789,42 @@ impl FunctionBuilder {
                 self.push(Computation::DirectCall {
                     dst,
                     callee: callee_sym.to_string(),
+                    args: call_args,
+                    safepoint_roots: Vec::new(),
+                    is_no_alloc: false,
+                });
+                return Ok(dst);
+            }
+            // Sprint 60: a DirectCall to a top-level function declared
+            // with a `#rest` parameter. The callee ABI is `fixed + 1`
+            // params: the `fixed` leading actuals, then ONE final slot
+            // holding a freshly-built `<simple-object-vector>` of the
+            // trailing actuals (positions >= fixed). We build that SOV
+            // here at the call site, keeping the callee's fixed-arity
+            // LLVM signature intact (no varargs). A call with fewer than
+            // `fixed` args is rejected; a call with exactly `fixed` args
+            // collects into a zero-length SOV.
+            if let Some(fixed) = ctx.top_names.rest_fixed_count(name) {
+                if arg_temps.len() < fixed {
+                    return Err(LoweringError::Unsupported {
+                        span,
+                        message: format!(
+                            "`{name}` requires at least {fixed} argument(s), called with {}",
+                            arg_temps.len()
+                        ),
+                    });
+                }
+                let rest_sov = self.emit_build_sov(&arg_temps[fixed..]);
+                let mut call_args: Vec<TempId> = arg_temps[..fixed].to_vec();
+                call_args.push(rest_sov);
+                let ret = ctx
+                    .top_names
+                    .return_type(name)
+                    .unwrap_or(TypeEstimate::Top);
+                let dst = self.fresh_temp(ret);
+                self.push(Computation::DirectCall {
+                    dst,
+                    callee: name.clone(),
                     args: call_args,
                     safepoint_roots: Vec::new(),
                     is_no_alloc: false,

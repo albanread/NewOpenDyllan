@@ -13,21 +13,21 @@ Author: NewOpenDylan stdlib
 //
 // SCOPE NOTE — the DRM `compose` / `curry` / `rcurry` / `always` are variadic
 // (they build closures that re-apply their captured function to an arbitrary
-// number of arguments). The full variadic forms still need `#rest` parameter
-// COLLECTION (binding a trailing `#rest` to a freshly-allocated argument vector)
-// plus a multi-arg `apply` on an arbitrary `<function>` value; the lowerer does
-// not yet collect `#rest` into a sequence, so those remain deferred. What IS now
-// supported (and was the real blocker) is calling an arbitrary captured / value
-// `<function>` with 2+ arguments — fixed in `make_function_ref` so a directly
-// registered user `define function` shadows the stdlib single-method generic of
-// the same name instead of mis-dispatching into it. So the FIXED-ARITY forms of
-// the combinators — the ones the corpus actually reaches for — ship here:
+// number of arguments). Sprint 60 landed `#rest` parameter COLLECTION: a
+// trailing `#rest var` on a user `define function` now binds `var` to a freshly
+// built `<simple-object-vector>` of the extra actuals, and the canonical
+// variadic *constructors* `list(…)` / `vector(…)` and N-ary `max` / `min` are
+// un-deferred on top of it (see sequences.dylan). The combinators below still
+// ship the FIXED-ARITY forms — the ones the corpus actually reaches for — and
+// the N-function `compose` / multi-captured-arg `curry`/`rcurry` / argument-
+// agnostic `always` STILL await one more piece: a multi-arg `apply` on an
+// arbitrary `<function>` value (so a collected rest vector can be spread back
+// over a captured function). That spread-apply is the remaining blocker for the
+// closure-returning combinators, tracked separately from `#rest` collection.
 //   * `compose(f, g)`        — two-function composition.
 //   * `curry(f, arg)`        — bind ONE leading argument.
 //   * `rcurry(f, arg)`       — bind ONE trailing argument.
 //   * `always(value)`        — one-argument constant function.
-// The N-function `compose` and the multi-captured-arg `curry`/`rcurry` (and the
-// 0-/2-arg `always` closures) await `#rest` collection.
 
 // ─── identity ───────────────────────────────────────────────────────────────
 //

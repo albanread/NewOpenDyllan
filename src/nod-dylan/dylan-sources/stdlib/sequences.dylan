@@ -303,12 +303,15 @@ define function aref (a, i) => (e)
   %vector-element(a, i)
 end function;
 
-// ─── max / min — binary numeric extrema ─────────────────────────────────────
+// ─── max / min — variadic numeric extrema ────────────────────────────────────
 //
-// Two-argument forms only. The DRM `max` / `min` are variadic (`#rest`), which
-// the lowerer can't bind yet (see report), so this covers the common
-// `max(a, b)` / `min(a, b)` call sites; wider arities fall through to dispatch
-// with extra args (compiles, runs the 2-arg method).
+// These define the BINARY methods; the DRM N-ary `max(a, b, c, …)` / `min(…)`
+// forms are un-deferred (Sprint 60) by a call-site fold that reduces arity-3+
+// calls to a left-nested chain of these binary generics. So `max(1, 9, 4, 7)`
+// runs as `max(max(max(1, 9), 4), 7)`. The 1-arg form returns its argument
+// (handled by the binary method specialising on `<object>` for the partner is
+// unnecessary — arity 1 falls through to dispatch which finds no 1-arg method;
+// real corpus uses are arity 2+, the path covered here).
 
 define function max (a, b) => (m)
   if (a > b) a else b end
@@ -339,16 +342,20 @@ define function tail (p) => (t)
   %pair-tail(p)
 end function;
 
-// ─── list — construct a <list> ───────────────────────────────────────────────
+// ─── list / vector — variadic DRM constructors ───────────────────────────────
 //
-// The DRM `list` is variadic (`list(a, b, c, …)`). The lowerer doesn't bind
-// `#rest` parameters in function bodies yet (see report), so this is the
-// one-argument constructor `list(x) ⇒ pair(x, #())`. Its real job in the
-// corpus is to make the BAREWORD `list` resolve as a first-class function
-// value (`reduce(list, seed, c)`): defining it registers a `list` generic so
-// the function-ref path finds it instead of erroring. Multi-argument call
-// sites (`list(a, b)`) lower through the dispatch path with their extra args
-// regardless (they compile; the 1-arg body runs).
+// Sprint 60: the DRM `list(a, b, c, …)` and `vector(a, b, c, …)` constructors
+// are now VARIADIC end to end. `#rest` collection landed (the lowerer binds a
+// trailing `#rest` to a freshly-built sequence), and on top of it a call-site
+// shortcut lowers `list(args…)` to a right-nested `%pair-alloc` cons-chain and
+// `vector(args…)` to a fresh `<simple-object-vector>` — any arity, `list()`/
+// `vector()` giving the empty forms. These intercept the call BEFORE dispatch,
+// so direct calls of every arity are correct.
+//
+// This 1-argument `list` definition is retained ONLY so the BAREWORD `list`
+// resolves as a first-class function value (`reduce(list, seed, c)`): defining
+// it registers a `list` generic the function-ref path can find. Direct calls
+// (`list(a, b, c)`) take the variadic call-site path above, not this body.
 
 define function list (x) => (l)
   %pair-alloc(x, %nil())
