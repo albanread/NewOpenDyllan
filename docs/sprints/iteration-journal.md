@@ -21,6 +21,33 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 
 *(newest first)*
 
+### 2026-06-15 — Iteration 25: `disjoin` / `conjoin` predicate combinators
+
+- **`disjoin`/`conjoin`** added to `stdlib/functional.dylan` (DRM functional ops):
+  `disjoin(p, q, …)(x)` is the short-circuiting logical OR of the predicates
+  applied to `x` (first non-`#f`, else `#f`); `conjoin(p, q, …)(x)` the AND
+  (`#f` at first false, else the last value). Predicates collected via `#rest`
+  (SOV), invoked with `%funcall1`, returned closure takes ONE call-site arg
+  (same shape as `curry`/`rcurry`).
+- **Implementation note (capture):** the first cut used `block`/`return` to
+  short-circuit, which nests a SECOND closure inside `method (x)` and broke
+  capture of the outer `#rest predicates` (stdlib failed to load —
+  `UndefinedIdent predicates`). Rewrote with Dylan's `|`/`&`, which short-circuit
+  natively (`result | expr` skips `expr` once `result` is non-`#f`) AND keep
+  `predicates` referenced directly in the method body (like `curry`'s `pre`), so
+  capture works. Lesson: a non-local-exit `block` inside a combinator closure
+  defeats single-level `#rest` capture; prefer `|`/`&` for short-circuit folds.
+- **Build+run verified (real AOT exe):** `disjoin(negative?,zero?,positive?)(0)`→true,
+  `conjoin(zero?,negative?,positive?)(0)`→false, `disjoin(negative?)(-5)`→true,
+  `conjoin(zero?,even?)(0)`→true, `disjoin(negative?,positive?)(0)`→false (`1 0 1 1 0`).
+- **Effect on test-functional.dylan:** removes the `unknown callee disjoin`/`conjoin`
+  CODEGEN blocker — the file now compiles + links natively (was: dump-dfm only).
+  It still CRASHES at runtime in the test bodies (a separate downstream issue in
+  the testworks `check-*` / `instance?`-on-operator-value path, e.g. `\>.disjoin`),
+  not a combinator defect. dump-dfm corpus unchanged at 74 (test-functional already
+  counted there).
+- **Gates:** eval=2, in-tree 55/55 (rust path), smoke-aot 6/6.
+
 ### 2026-06-15 — Iteration 24: `apply` spread + N-ary `compose`/`curry`/`rcurry` (merged agent)
 
 - **Merged the spread-apply agent** (`0b5f34c`): `apply(fn, arg…, last-seq)` wires the

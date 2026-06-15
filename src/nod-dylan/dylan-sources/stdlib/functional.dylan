@@ -220,3 +220,43 @@ end function;
 define function always (value) => (constant-function)
   method (ignore) value end
 end function;
+
+// ─── disjoin / conjoin ──────────────────────────────────────────────────────────
+//
+// DRM `disjoin(predicate, …) => disjunction` and `conjoin(predicate, …) =>
+// conjunction`: combine predicates with short-circuiting logical OR / AND.
+// `disjoin(p, q, r)(x)` returns the first non-`#f` of `p(x)`, `q(x)`, `r(x)`
+// (or `#f` if all are false); `conjoin(p, q, r)(x)` returns `#f` at the first
+// false predicate, else the last predicate's value (`#t` for no predicates).
+// The predicates are collected with `#rest predicates` (a
+// `<simple-object-vector>`); each is invoked with `%funcall1` (as in `compose`),
+// and the returned closure takes ONE call-site argument (see the
+// COMBINATOR-CLOSURE ARITY note above). Short-circuiting falls out of Dylan's
+// `|`/`&`: `result | expr` skips `expr` once `result` is non-`#f`, and `result &
+// expr` skips it once `result` is `#f` — so later predicates aren't invoked
+// after the result is decided. (No `block`/`return`, which would nest a second
+// closure and break capture of the outer `#rest predicates`.) The DRM
+// `#rest`-argument predicate form (the combined predicate called with several
+// arguments) needs `#rest` on the lifted closure — deferred.
+
+define function disjoin (#rest predicates) => (disjunction)
+  method (x)
+    let n = %vector-size(predicates);
+    let result = #f;
+    for (i from 0 below n)
+      result := result | %funcall1(%vector-element(predicates, i), x);
+    end;
+    result
+  end
+end function;
+
+define function conjoin (#rest predicates) => (conjunction)
+  method (x)
+    let n = %vector-size(predicates);
+    let result = #t;
+    for (i from 0 below n)
+      result := result & %funcall1(%vector-element(predicates, i), x);
+    end;
+    result
+  end
+end function;
