@@ -647,9 +647,9 @@ impl<L: HeapLayout> PageHeap<L> {
     /// 2. **Pre-chunk release**. Snapshot `from_pages` and release
     ///    every zero-mark unpinned page straight to Free, growing
     ///    the dest budget for the first chunk.
-    /// 3. **Chunked loop**, iterating until every `from_page` is
-    ///    processed. Each chunk's size is bounded by current Free
-    ///    so Phase 1 can't run out of destination pages:
+    /// 3. **Chunked loop (Cheney discipline)**, iterating until every
+    ///    `from_page` is processed. Each chunk's size is bounded by
+    ///    current Free so Phase 1 can't run out of destination pages:
     ///    - **Phase 1 (Copy)**: iterate marked starts on the
     ///      chunk's source pages; copy each to `dest_gen` and
     ///      write `Word::forward` at the source cell. Pinned cells
@@ -659,10 +659,18 @@ impl<L: HeapLayout> PageHeap<L> {
     ///      slots + dirty-card cells via the closure), then walk
     ///      every live page in `from_gen` / `dest_gen` and rewrite
     ///      payload Words whose targets carry a forwarding marker.
-    ///    - **Phase 3 (Reclaim)**: walk the chunk's source pages.
-    ///      Pages with pins flip to `dest_gen` in place, preserving
-    ///      pinned objects; pages without pins release to Free,
-    ///      growing the budget for the next chunk.
+    ///    Phase 3 is NOT run per-chunk — source pages (and their
+    ///    in-page forward markers) survive until every chunk's Phase 2
+    ///    has completed, so a backward cross-chunk pointer (a cons
+    ///    cdr into an earlier, lower-address node) can always be
+    ///    rewritten before its target page is reclaimed or reused.
+    /// 3.5. **Phase 3 (Reclaim), DEFERRED, once at end-of-cycle**:
+    ///    walk EVERY source page. Pages with pins flip to `dest_gen`
+    ///    in place, preserving pinned objects; pages without pins
+    ///    release to Free. Because this runs only after the final
+    ///    chunk, no released source page is ever re-acquired as a
+    ///    destination within the same cycle, and no live forward
+    ///    marker is destroyed before it is read.
     /// 4. **Cleanup**: clear pin set, mark bits, recycle-live-counts.
     ///
     /// ## Pre-conditions
@@ -746,10 +754,11 @@ impl<L: HeapLayout> PageHeap<L> {
             })
             .collect();
 
-        // Snapshot from_pages. Phase 3 of each chunk releases the
-        // chunk's zero-mark unpinned pages and counts them in
-        // `pages_freed`; we don't pre-release here so the EvacResult
-        // tally captures every reclaim.
+        // Snapshot from_pages. Under Cheney discipline a single
+        // end-of-cycle Phase 3 releases every zero-mark unpinned page
+        // and flips every pinned page, counting both in the EvacResult
+        // tally; nothing is pre-released here, and no page is reclaimed
+        // mid-cycle.
         let from_pages: Vec<usize> =
             self.pages_in_gen(from_gen).collect();
 
@@ -783,25 +792,66 @@ impl<L: HeapLayout> PageHeap<L> {
             v
         };
 
-        // Step 3: chunked loop.
+        // Step 3: chunked loop — Cheney discipline.
+        //
+        // Each chunk runs Phase 1 (copy) then Phase 2 (rewrite). Phase 3
+        // (reclaim: release un-pinned source pages, flip pinned pages) is
+        // DEFERRED to a single end-of-cycle pass below — it does NOT run
+        // per-chunk.
+        //
+        // Why defer: Phase 1 leaves an in-page `Word::forward` marker at
+        // every copied object's source cell. Phase 2 follows those markers
+        // to rewrite pointers. A BACKWARD cross-chunk pointer (a later
+        // chunk's object referencing an earlier, already-processed chunk's
+        // object — exactly the shape of a `cons` list, where each cell's
+        // cdr points at a lower-address, earlier-allocated node) can only
+        // be rewritten if the earlier chunk's forward markers are still
+        // alive when the later chunk's Phase 2 runs. Releasing+zeroing the
+        // earlier chunk's source pages mid-cycle (the pre-Cheney behaviour)
+        // destroyed those markers AND handed the pages back to the Free
+        // budget for reuse as destinations — so the marker's address could
+        // be re-occupied by a NEW object, and `maybe_rewrite`'s Free-gen
+        // bail would silently drop the backward pointer, dangling the
+        // earlier chunk's prefix. Keeping every source page in `from_gen`
+        // until all chunks' Phase 2 passes have completed makes every
+        // forward marker observable to every rewrite, and guarantees no
+        // released source page is ever re-acquired as a destination within
+        // the same cycle.
+        //
+        // Budget consequence: released sources no longer replenish Free
+        // mid-cycle, so a chunk's destination demand is met only from
+        // GENUINELY free pages (the still-uncommitted tail of the
+        // reservation, committed on demand by `acquire_free_page`). The
+        // chunk budget therefore draws strictly from current `Free`; if
+        // that is exhausted before every survivor is copied, Phase 1's
+        // `try_alloc_*` returns `None` and raises the existing loud
+        // `GcStallError` (mid-evac OOM) rather than corrupting live data.
         let mut idx = 0;
         while idx < from_pages.len() {
             let avail_free = self.count_pages_in_gen(Generation::Free);
-            // Pages still pinned in from_gen (already-flipped ones have left
-            // from_gen, so they drop out naturally as the loop progresses).
+            // Pin-carrying source pages never return to Free (they flip in
+            // place at end-of-cycle), so they can never replenish the chunk
+            // budget. Under defer-release ALL pinned pages stay in from_gen
+            // for the whole cycle, so this stays constant; excluding it keeps
+            // a chunk from over-committing dest demand against pages that
+            // won't free.
             let pinned_pending = pinned_pages
                 .iter()
                 .filter(|&&p| self.desc(p).generation == from_gen)
                 .count();
-            // Pick chunk_size at 7/8 of the *replenishable* free budget. The
-            // 1/8 margin absorbs two sources of dest-demand slop:
+            // Pick chunk_size at 7/8 of the free budget. The 1/8 margin
+            // absorbs two sources of dest-demand slop:
             //   - per-page density variance (older source pages
             //     have more dead cells than newer ones; the
             //     "1 source → 1 dest" worst case is conservative on
             //     average but can be exceeded on dense tails),
             //   - dest allocator fragmentation when a boxed object
             //     can't fit in the current dest page's tail.
-            // Floor at 1 to guarantee progress; cap at remaining.
+            // Floor at 1 to guarantee progress; cap at remaining. Under
+            // Cheney discipline `avail_free` only ever SHRINKS across
+            // chunks (sources stay live), so chunk_size shrinks too — but
+            // every page committed for a destination is genuinely free, so
+            // we never reuse a live source.
             let effective_free = avail_free.saturating_sub(pinned_pending);
             let chunk_size = ((effective_free * 7) / 8)
                 .max(1)
@@ -822,16 +872,24 @@ impl<L: HeapLayout> PageHeap<L> {
 
             self.phase2_rewrite(from_gen, dest_gen, &mut visit_roots);
 
-            let (released, flipped) = self.phase3_reclaim(
-                dest_gen,
-                &chunk_pages,
-                &pinned_with_kind,
-            );
-            total_pages_freed += released;
-            total_pages_flipped += flipped;
-
             idx += chunk_size;
         }
+
+        // Step 3.5: DEFERRED Phase 3. Now that every chunk's Phase 2 has
+        // run — so every pointer that needed a forward marker has already
+        // followed it — reclaim ALL source pages in one pass: release
+        // un-pinned pages to Free (zeroing their now-defunct markers) and
+        // flip pin-carrying pages in place to `dest_gen`. Passing the full
+        // `from_pages` set (not a per-chunk slice) and running it exactly
+        // once is what makes this Cheney-correct: no source page is reused
+        // mid-cycle, so no forward marker is destroyed before it is read.
+        let (released, flipped) = self.phase3_reclaim(
+            dest_gen,
+            &from_pages,
+            &pinned_with_kind,
+        );
+        total_pages_freed += released;
+        total_pages_flipped += flipped;
 
         // Step 4: end-of-cycle cleanup.
         self.clear_all_pins();
@@ -1219,12 +1277,18 @@ impl<L: HeapLayout> PageHeap<L> {
         })
     }
 
-    /// Phase 3: reclaim a chunk's source pages. Pages with pins
-    /// flip to `dest_gen` in place (preserving pinned objects);
-    /// pages without pins release to Free. Forwarding markers on
-    /// released pages drop with the page; markers on flipped pages
-    /// persist as unreachable cells (their start bits cleared so
-    /// future scans don't see them).
+    /// Phase 3: reclaim source pages. Pages with pins flip to
+    /// `dest_gen` in place (preserving pinned objects); pages without
+    /// pins release to Free. Forwarding markers on released pages drop
+    /// with the page; markers on flipped pages persist as unreachable
+    /// cells (their start bits cleared so future scans don't see them).
+    ///
+    /// Under Cheney discipline this runs EXACTLY ONCE per evacuation,
+    /// over the whole `from_pages` set, after every chunk's Phase 2 has
+    /// completed — never per-chunk. Running it only at end-of-cycle is
+    /// what guarantees no source page (and no live forward marker) is
+    /// reclaimed or reused while a later chunk still needs to follow a
+    /// backward pointer into it.
     fn phase3_reclaim(
         &mut self,
         dest_gen: Generation,
@@ -1662,6 +1726,111 @@ mod tests {
             expected -= 1;
         }
         assert_eq!(seen, 50);
+    }
+
+    #[test]
+    fn backward_chain_survives_multi_chunk_evac() {
+        // REGRESSION (Cheney discipline / chunked evacuator).
+        //
+        // Builds a SINGLE-ROOTED, BACKWARD-LINKED cons chain — each
+        // node's cdr points at a LOWER-address, EARLIER-allocated node,
+        // exactly mirroring `acc := pair(i, acc)`. The chain is long
+        // enough to span many G0 pages on a TIGHT heap, so the chunked
+        // evacuator is FORCED to process it in more than one chunk.
+        //
+        // Pre-Cheney, each chunk's Phase 3 released+zeroed its own
+        // un-pinned source pages IMMEDIATELY and those freed pages were
+        // re-acquired as destinations by later chunks. A backward
+        // cross-chunk cdr (head, in a LATER chunk, pointing into an
+        // EARLIER, already-released chunk) could never be rewritten:
+        // `maybe_rewrite` reads the target page as `Generation::Free`
+        // and bails, leaving the cdr dangling into a zeroed page. The
+        // prefix of the chain is orphaned and the walk truncates (or
+        // reads fixnum 0 / nil early). With deferred end-of-cycle
+        // reclaim, every forward marker survives until every chunk's
+        // Phase 2 has run, so the whole chain is rewritten intact.
+        //
+        // Heap sizing (each cons page holds 8192/2 = 4096 conses):
+        //   * 21-page reservation (1.3 MB).
+        //   * 40960 live conses = 10 source pages (pages 0..=9, low
+        //     addresses), rooted only at the head (highest address).
+        //   * Initial Free = 21 - 10 = 11 pages; chunk_size = 7/8 * 11
+        //     = 9 (< 10 source pages) so the live chain STRADDLES a
+        //     chunk boundary — the bug's precondition.
+        //   * Deferred-release peak = 10 source + 10 dest = 20 <= 21,
+        //     so the (correct) cycle fits without stalling.
+        const N: usize = 40960;
+        let mut h =
+            PageHeap::<crate::lisp_layout::LispLayout>::with_reservation(
+                21 * 64 * 1024,
+            );
+        let chain = alloc_cons_chain(&mut h, Generation::G0, N);
+        let head = *chain.last().unwrap();
+
+        // Confirm the test actually exercises the multi-chunk path:
+        // source pages must exceed the first chunk's budget, otherwise
+        // the whole chain lands in a single chunk and the bug can't fire.
+        let source_pages = h.count_pages_in_gen(Generation::G0);
+        let free_pages = h.count_pages_in_gen(Generation::Free);
+        let first_chunk = ((free_pages * 7) / 8).max(1);
+        assert!(
+            source_pages > first_chunk,
+            "test must force multi-chunk: source_pages={source_pages} \
+             first_chunk_budget={first_chunk} (free={free_pages})",
+        );
+
+        let mut roots = [head];
+        let result = h.evacuate_from_word_roots(
+            Generation::G0,
+            Generation::G1,
+            &mut roots,
+        );
+        assert_eq!(
+            result.objects_copied, N,
+            "every live cons must be copied",
+        );
+
+        // Walk the relocated chain from its new head: the descending
+        // fixnum sequence (N-1 .. 0) and the exact length must both be
+        // preserved, link for link. A dangled backward pointer would
+        // truncate the walk or surface a wrong fixnum.
+        let mut cur = roots[0];
+        let mut seen = 0usize;
+        let mut expected = (N - 1) as i64;
+        while !cur.is_nil() {
+            assert_eq!(cur.tag(), Tag::Cons, "link {seen} lost its Cons tag");
+            let addr = (cur.raw() & PAYLOAD_MASK) as *const u64;
+            let page = h
+                .page_of(addr as *const u8)
+                .expect("link points inside the reservation");
+            assert_eq!(
+                h.desc(page).generation,
+                Generation::G1,
+                "link {seen} must have moved into dest_gen, not dangle \
+                 into a released/zeroed page",
+            );
+            unsafe {
+                let car = Word::from_raw(*addr);
+                let cdr = Word::from_raw(*addr.add(1));
+                assert_eq!(
+                    car.as_fixnum(),
+                    Some(expected),
+                    "link {seen}: expected fixnum {expected} (a dangling \
+                     backward pointer reads 0 from a zeroed page)",
+                );
+                cur = cdr;
+            }
+            seen += 1;
+            expected -= 1;
+        }
+        assert_eq!(
+            seen, N,
+            "the full backward chain must survive a multi-chunk evac; \
+             a shorter count means the prefix was orphaned",
+        );
+        // No live G0 pages remain; the source pages were reclaimed only
+        // at end-of-cycle.
+        assert_eq!(h.count_pages_in_gen(Generation::G0), 0);
     }
 
     #[test]
@@ -2395,36 +2564,104 @@ mod tests {
     }
 
     #[test]
-    fn marked_within_gen_evacuation_recycles_from_pages() {
-        let mut h = small_heap();
-        let mut roots = Vec::new();
-
-        for marker in 0..7 {
-            let ptr = h
-                .try_alloc_boxed_in(Generation::G0, PAGE_SIZE_CELLS)
-                .expect("one page-sized object per page");
-            unsafe {
-                *ptr.as_ptr() =
-                    HeapHeader::new(HeapType::Vector, (PAGE_SIZE_CELLS - 1) as u32).raw();
-                for i in 1..PAGE_SIZE_CELLS {
-                    *ptr.as_ptr().add(i) = Word::fixnum(marker).raw();
+    fn within_gen_evac_recycles_when_room_then_stalls_loudly_when_full() {
+        // Cheney discipline: source pages are NOT reused mid-cycle, so a
+        // within-gen (G0→G0) compaction needs ~2× space — destinations
+        // for the live set while the original source set is still held.
+        //
+        // Part A (room available): 7 live page-sized objects in a
+        // 16-page heap. Copy succeeds (7 dest + 7 source held = 14 ≤ 16);
+        // the original source pages are reclaimed only at end-of-cycle,
+        // leaving 7 G0 + 9 Free. This is the recycling intent of the old
+        // test, satisfied without ANY mid-cycle source-page reuse.
+        {
+            let mut h =
+                PageHeap::<crate::lisp_layout::LispLayout>::with_reservation(
+                    16 * 64 * 1024,
+                );
+            let mut roots = Vec::new();
+            for marker in 0..7 {
+                let ptr = h
+                    .try_alloc_boxed_in(Generation::G0, PAGE_SIZE_CELLS)
+                    .expect("one page-sized object per page");
+                unsafe {
+                    *ptr.as_ptr() = HeapHeader::new(
+                        HeapType::Vector,
+                        (PAGE_SIZE_CELLS - 1) as u32,
+                    )
+                    .raw();
+                    for i in 1..PAGE_SIZE_CELLS {
+                        *ptr.as_ptr().add(i) = Word::fixnum(marker).raw();
+                    }
                 }
+                roots.push(Word::from_ptr(ptr.as_ptr() as *const u8, Tag::Vector));
             }
-            roots.push(Word::from_ptr(ptr.as_ptr() as *const u8, Tag::Vector));
+            h.mark_from_roots(Generation::G0, &roots);
+            h.prepare_recycle_live_counts_from_marks(Generation::G0);
+
+            let result = h.evacuate_from_word_roots(
+                Generation::G0,
+                Generation::G0,
+                roots.as_mut_slice(),
+            );
+            assert_eq!(result.objects_copied, 7);
+            assert_eq!(h.count_pages_in_gen(Generation::G0), 7);
+            assert_eq!(h.count_pages_in_gen(Generation::Free), 9);
+            // Every root moved to a freshly-allocated dest page.
+            for root in &roots {
+                let addr =
+                    (root.raw() & crate::word::PAYLOAD_MASK) as *const u8;
+                let page = h.page_of(addr).expect("root in heap");
+                assert_eq!(h.desc(page).generation, Generation::G0);
+            }
         }
 
-        h.mark_from_roots(Generation::G0, &roots);
-        h.prepare_recycle_live_counts_from_marks(Generation::G0);
+        // Part B (no room to grow): the SAME 7-live-pages workload in an
+        // 8-page heap. Under the old mid-cycle recycler this "succeeded"
+        // by reusing source pages as destinations — the very behaviour
+        // that dangled backward cross-chunk pointers. Under Cheney
+        // discipline there is nowhere to copy into (1 free page, 7 still
+        // held as source), so the evacuator raises a LOUD `GcStallError`
+        // (mid-evac OOM) instead of silently corrupting live data.
+        {
+            let mut h = small_heap();
+            let mut roots = Vec::new();
+            for marker in 0..7 {
+                let ptr = h
+                    .try_alloc_boxed_in(Generation::G0, PAGE_SIZE_CELLS)
+                    .expect("one page-sized object per page");
+                unsafe {
+                    *ptr.as_ptr() = HeapHeader::new(
+                        HeapType::Vector,
+                        (PAGE_SIZE_CELLS - 1) as u32,
+                    )
+                    .raw();
+                    for i in 1..PAGE_SIZE_CELLS {
+                        *ptr.as_ptr().add(i) = Word::fixnum(marker).raw();
+                    }
+                }
+                roots.push(Word::from_ptr(ptr.as_ptr() as *const u8, Tag::Vector));
+            }
+            h.mark_from_roots(Generation::G0, &roots);
+            h.prepare_recycle_live_counts_from_marks(Generation::G0);
 
-        let result = h.evacuate_from_word_roots(
-            Generation::G0,
-            Generation::G0,
-            roots.as_mut_slice(),
-        );
-
-        assert_eq!(result.objects_copied, 7);
-        assert_eq!(h.count_pages_in_gen(Generation::G0), 7);
-        assert_eq!(h.count_pages_in_gen(Generation::Free), 1);
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                || {
+                    h.evacuate_from_word_roots(
+                        Generation::G0,
+                        Generation::G0,
+                        roots.as_mut_slice(),
+                    )
+                },
+            ))
+            .expect_err("a >50%-live within-gen evac with no room must stall");
+            let stall = panic
+                .downcast_ref::<GcStallError>()
+                .expect("panic payload should be GcStallError, not corruption");
+            assert_eq!(stall.reason, GcStallReason::MidEvacOOM);
+            assert_eq!(stall.from_gen, Generation::G0);
+            assert_eq!(stall.dest_gen, Generation::G0);
+        }
     }
 
     #[cfg(feature = "conservative-pin")]

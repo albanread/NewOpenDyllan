@@ -94,9 +94,31 @@ use crate::wrapper::Wrapper;
 /// needed. The IDE live set at startup (class table, symbol table,
 /// COM handles, stdlib metadata) comfortably fits in 4 MB.
 pub const DEFAULT_YOUNG_BYTES: usize = 4 * 1024 * 1024;
-/// Default old-generation capacity (12 MB — 3× the young gen).
+/// Default old-generation capacity.
+///
+/// The newgc page heap reserves `young_bytes + old_bytes` of ADDRESS
+/// SPACE up front (`VirtualAlloc(MEM_RESERVE, PAGE_NOACCESS)`) but
+/// commits pages lazily, so this number bounds the reservation — and
+/// therefore the page pool the evacuator can "grow" into — without
+/// costing physical memory until pages are actually touched.
+///
+/// Sized for Cheney discipline. The evacuator no longer reuses a
+/// collection's source pages as destinations mid-cycle (that was the
+/// chunked-evac backward-pointer corruption bug — a released source
+/// page re-acquired as a dest destroyed in-page forward markers and
+/// dangled later chunks' backward cdrs). A correct copying collector
+/// therefore needs ~2× the live working set available during a
+/// compaction (live source held WHILE the live copy is built). The
+/// old 12 MB value was tuned for the previous, corrupting in-place
+/// recycler that compacted Tenured at ~100% fill; under Cheney rules
+/// that same fill would stall (loudly — `GcStallError` — never
+/// corruption). Bumping the reservation gives the page pool room to
+/// grow so realistic accumulation workloads (e.g. a multi-hundred-k
+/// cons-list build, ~10-16 MB live) compact successfully instead of
+/// stalling. Reservation cost is address space only; committed RAM
+/// still tracks the live set plus the in-flight copy.
 /// Sprint 43d workaround retired; see `DEFAULT_YOUNG_BYTES`.
-pub const DEFAULT_OLD_BYTES: usize = 12 * 1024 * 1024;
+pub const DEFAULT_OLD_BYTES: usize = 48 * 1024 * 1024;
 /// Legacy alias preserved for any external callers. Sprint 09's name
 /// for the bump-heap reservation; Sprint 11 keeps it as the sum of
 /// young + old.
