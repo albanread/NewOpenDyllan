@@ -12,7 +12,7 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 63 / 161 | … → 60 (select/case) → 63 (DRM system classes) |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 71 / 161 | … → 63 (DRM classes) → 71 (DRM classes batch-2) |
 | OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
@@ -20,6 +20,21 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 ## Iterations
 
 *(newest first)*
+
+### 2026-06-15 — Iteration 20: DRM class markers batch-2 — corpus 63 → 71
+
+Extended `system-classes.dylan` with 27 more pure-Dylan class-name markers (AOT-safe,
+self-rebuilt): reflection/types (`<type>`/`<class>`/`<singleton>`), the number tower
+(`<number>`/`<complex>`/`<real>`/`<rational>`/`<float>`/`<byte>`/`<bit>`), conditions
+(`<restart>`/`<arithmetic-error>`/`<stream-error>` + EOF/read/write variants),
+collections (`<list>`/`<deque>`/`<set>`/`<object-table>`/`<string-table>`/
+`<stretchy-sequence>`/float-vectors). `instance?` CPL verified; 8 corpus files newly
+lower (classes/core/numbers/byte-vector/streams/collections-suite/…). in-tree 55/55
+both paths, smoke-aot 6/6, corpus 63 → 71.
+Limitation: seed classes (`<integer>`/floats/`<pair>`) not re-parented under the new
+abstract bases, so `instance?(1.5,<float>)` etc. are #f (clears the ident, not full
+subtype semantics). **Now-dominant blockers:** testworks `test`-macro re-parse (40
+files), `define interface-specification-suite` (24), `for`-`in`-collection lowering (17).
 
 ### 2026-06-15 — Iteration 19: deeper macros + DRM system classes + funcall fix (3 agents)
 
