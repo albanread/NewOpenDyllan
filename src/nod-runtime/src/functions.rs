@@ -928,8 +928,38 @@ pub fn lookup_function_code(name: &str, arity: usize) -> Option<*const u8> {
 /// A direct (non-generic) function takes the cached static-area path
 /// described below; both variants share the same cache so `\name`
 /// canonically resolves to one Word per `(name, arity)` either way.
+///
+/// ## Direct registration shadows the generic trampoline
+///
+/// A name can be BOTH a registered generic (with methods) AND a directly
+/// registered function for the same `(name, arity)`. This happens because
+/// the stdlib loader rewrites every `define function f` into a single
+/// `define method f (… :: <object>)` so user `Dispatch` IR can reach it
+/// (`rewrite_define_function_to_method`). When user code then defines its
+/// OWN top-level `define function f` of the same name+arity, that user
+/// body is registered directly in the JIT registry — but it is NOT added
+/// as a method on the stdlib's `f` generic.
+///
+/// If we short-circuited to the generic trampoline whenever
+/// `is_generic_defined(name)` were true, `\f` (and any `let g = f; g(…)`)
+/// would dispatch into the *stdlib* `f$<object>_<object>` method and
+/// silently ignore the user's shadowing definition — returning garbage
+/// (e.g. user `define function add (a, b) a + b end` reached via a value
+/// would run the stdlib list-`add` and yield a pair, not a sum).
+///
+/// So a DIRECT registration for `(name, arity)` (a rust operator shim or
+/// a user/stdlib `define function` body) takes precedence over the
+/// generic trampoline. Genuine multi-method generics (`size`, `speak`,
+/// user `define generic` + `define method`) carry no direct registration
+/// for their `(name, arity)`, so they still resolve to the trampoline and
+/// dispatch by class at call time.
 pub fn make_function_ref(name: &str, arity: usize) -> Option<Word> {
-    if crate::dispatch::is_generic_defined(name) {
+    // A directly registered function (rust shim, user/stdlib `define
+    // function` body) shadows the generic trampoline — see the rationale
+    // above. Only fall back to the generic-dispatch trampoline when no
+    // direct callee exists for this exact `(name, arity)`.
+    let direct = lookup_function_code(name, arity);
+    if direct.is_none() && crate::dispatch::is_generic_defined(name) {
         return Some(make_generic_trampoline_ref(name, arity));
     }
     let mut cache = FUNCTION_REF_CACHE
@@ -941,7 +971,7 @@ pub fn make_function_ref(name: &str, arity: usize) -> Option<Word> {
     {
         return Some(*w);
     }
-    let code = lookup_function_code(name, arity)?;
+    let code = direct?;
     // Allocate the <function> in the static area. `rust_make` writes
     // into the moveable heap by default; for a Sprint 21 function-ref
     // we want pinned storage so the codegen-baked address stays valid

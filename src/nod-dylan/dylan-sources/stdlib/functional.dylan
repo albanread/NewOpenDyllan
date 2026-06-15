@@ -13,13 +13,21 @@ Author: NewOpenDylan stdlib
 //
 // SCOPE NOTE — the DRM `compose` / `curry` / `rcurry` / `always` are variadic
 // (they build closures that re-apply their captured function to an arbitrary
-// number of arguments). That requires `#rest` parameter binding + a correct
-// multi-arg `apply` on an arbitrary `<function>` value, neither of which the
-// current lowerer/runtime supports correctly (a captured user function called
-// with two arguments computes a garbage result). They are deliberately omitted
-// rather than shipped wrong. The helpers here only ever apply a captured
-// function to ONE argument (`%funcall1`), which is the path the runtime gets
-// right.
+// number of arguments). The full variadic forms still need `#rest` parameter
+// COLLECTION (binding a trailing `#rest` to a freshly-allocated argument vector)
+// plus a multi-arg `apply` on an arbitrary `<function>` value; the lowerer does
+// not yet collect `#rest` into a sequence, so those remain deferred. What IS now
+// supported (and was the real blocker) is calling an arbitrary captured / value
+// `<function>` with 2+ arguments — fixed in `make_function_ref` so a directly
+// registered user `define function` shadows the stdlib single-method generic of
+// the same name instead of mis-dispatching into it. So the FIXED-ARITY forms of
+// the combinators — the ones the corpus actually reaches for — ship here:
+//   * `compose(f, g)`        — two-function composition.
+//   * `curry(f, arg)`        — bind ONE leading argument.
+//   * `rcurry(f, arg)`       — bind ONE trailing argument.
+//   * `always(value)`        — one-argument constant function.
+// The N-function `compose` and the multi-captured-arg `curry`/`rcurry` (and the
+// 0-/2-arg `always` closures) await `#rest` collection.
 
 // ─── identity ───────────────────────────────────────────────────────────────
 //
@@ -70,4 +78,60 @@ define function choose-by (pred, test-seq, value-seq) => (result)
     %fip-advance!(vs);
   end;
   reverse(acc)
+end function;
+
+// ─── compose ──────────────────────────────────────────────────────────────────
+//
+// DRM `compose(f, g, …) => composite`. Returns a function that pipes its
+// argument right-to-left through the supplied functions: `compose(f, g)(x)`
+// is `f(g(x))`. The DRM form is variadic in the number of functions; the
+// two-function form shipped here is the overwhelmingly common case (and the
+// one the corpus reaches for). The returned closure captures `f` and `g` and
+// applies each with `%funcall1`, the single-argument funcall path. (The
+// N-function form needs `#rest` collection over the function list — deferred.)
+
+define function compose (f, g) => (composite)
+  method (x) %funcall1(f, %funcall1(g, x)) end
+end function;
+
+// ─── curry ──────────────────────────────────────────────────────────────────
+//
+// DRM `curry(function, arg, …) => curried`. Returns a function that, when
+// called, invokes `function` with the captured leading argument(s) PREPENDED
+// to the call-site arguments. The single-captured-argument form shipped here
+// returns `method (x) function(arg, x) end`: it binds ONE leading argument and
+// accepts ONE more at call time, applying the captured `function` value with
+// `%funcall2` (the multi-arg funcall path fixed this sprint). This covers the
+// canonical `curry(\+, n)` / `curry(\*, n)` adder/scaler idioms. (Binding more
+// than one leading arg, or accepting a variable number of trailing args, needs
+// `#rest` collection — deferred.)
+
+define function curry (fn, arg) => (curried)
+  method (x) %funcall2(fn, arg, x) end
+end function;
+
+// ─── rcurry ───────────────────────────────────────────────────────────────────
+//
+// DRM `rcurry(function, arg, …) => rcurried`. The right-handed sibling of
+// `curry`: the captured argument(s) are APPENDED after the call-site arguments.
+// The single-captured-argument form returns `method (x) function(x, arg) end`,
+// applying the captured `function` value with `%funcall2`. Canonical use is
+// `rcurry(\-, n)` (subtract a constant) and `rcurry(\<, n)` (a "less-than-n"
+// predicate). (Multi-arg forms need `#rest` collection — deferred.)
+
+define function rcurry (fn, arg) => (rcurried)
+  method (x) %funcall2(fn, x, arg) end
+end function;
+
+// ─── always ───────────────────────────────────────────────────────────────────
+//
+// DRM `always(object) => constant-function`. Returns a function that ignores
+// its arguments and always returns the captured `object`. The DRM result
+// accepts any number of arguments; the one-argument form shipped here returns
+// `method (ignore) value end`, which is the shape `map` / `find-key` / default
+// callbacks reach for (a constant transform over one element). (The argument-
+// agnostic 0-/N-arg form needs `#rest` collection — deferred.)
+
+define function always (value) => (constant-function)
+  method (ignore) value end
 end function;
