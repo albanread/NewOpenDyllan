@@ -21,6 +21,28 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 
 *(newest first)*
 
+### 2026-06-15 — Iteration 22: `for (var in collection)` lowering; reverted a hollow testworks fix
+
+- **for-in-collection** (`lower.rs`): `for (x in coll) … end` now lowers via FIP,
+  composing with numeric/step/`until:`/`while:`/`finally` + parallel/nested clauses
+  (one `%fip-init` state per in-clause; parallel stops at the shortest). Verified
+  build+run: `sum #(10,20,30)`=60, parallel→3, `finally`=600, nested=220, empty→99,
+  and numeric `sum 1..100`=5050 still works. nod-sema 48/0 (+4 tests). in-tree 55/55,
+  smoke-aot 6/6. Corpus 71→71 (the 17 `for…in` files are blocked UPSTREAM — the
+  testworks `test`-macro re-parse, parse diagnostics, undefined idents — not by the
+  in-clause; the feature is correct + ready for when those clear).
+- **Reverted a HOLLOW testworks fix.** An agent's `?options:parameter-list` rule for
+  `define test/suite (keyword: …)` heads reported corpus 71→78, but build+run review
+  exposed it as hollow: `define test foo (description: "x") … end` with a caller
+  fails `unknown callee foo` and dump-ast shows the head left RAW/unexpanded — the
+  rule does NOT match keyword property-lists (the macro-engine rewrite didn't fix that
+  iteration-11 gap), so the test function is SILENTLY DROPPED and dump-dfm "passes" by
+  losing the function. Reverted (corpus back to a real 71). The keyword-property-list
+  `define test/suite` head remains an OPEN deep parser problem (failed 2 agents);
+  needs hands-on parser work, not another fire-and-forget rule. The
+  `interface-specification-suite` no-op (legit, +4) was reverted with it; re-do
+  cleanly later. (This is exactly why every agent change is build+run-reviewed.)
+
 ### 2026-06-15 — Iteration 21: `#rest` parameter collection + variadic stdlib
 
 - **`#rest` collection** (`lower.rs`): a `#rest var` param now binds `var` to a fresh
