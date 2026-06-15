@@ -11,23 +11,35 @@ Author: NewOpenDylan stdlib
 // ordinary call AND as a first-class `<function>` value (passed to `map`,
 // `choose`, `do`, …). No new Rust runtime code.
 //
-// SCOPE NOTE — the DRM `compose` / `curry` / `rcurry` / `always` are variadic
-// (they build closures that re-apply their captured function to an arbitrary
-// number of arguments). Sprint 60 landed `#rest` parameter COLLECTION: a
-// trailing `#rest var` on a user `define function` now binds `var` to a freshly
-// built `<simple-object-vector>` of the extra actuals, and the canonical
-// variadic *constructors* `list(…)` / `vector(…)` and N-ary `max` / `min` are
-// un-deferred on top of it (see sequences.dylan). The combinators below still
-// ship the FIXED-ARITY forms — the ones the corpus actually reaches for — and
-// the N-function `compose` / multi-captured-arg `curry`/`rcurry` / argument-
-// agnostic `always` STILL await one more piece: a multi-arg `apply` on an
-// arbitrary `<function>` value (so a collected rest vector can be spread back
-// over a captured function). That spread-apply is the remaining blocker for the
-// closure-returning combinators, tracked separately from `#rest` collection.
-//   * `compose(f, g)`        — two-function composition.
-//   * `curry(f, arg)`        — bind ONE leading argument.
-//   * `rcurry(f, arg)`       — bind ONE trailing argument.
-//   * `always(value)`        — one-argument constant function.
+// SCOPE NOTE — the DRM `apply` / `compose` / `curry` / `rcurry` spread a
+// captured-or-collected argument vector back over a `<function>` value. Two
+// pieces landed to unblock them:
+//
+//   1. `#rest` parameter COLLECTION (Sprint 60): a trailing `#rest var` on a
+//      `define function` binds `var` to a freshly built
+//      `<simple-object-vector>` of the extra actuals.
+//   2. SPREAD-apply (`apply`, below): the runtime `nod_apply(fn, args-sov)`
+//      reads the SOV's runtime length and dispatches to the matching callee
+//      arity (0..8, the `MAX_APPLY_ARITY` cap — see `nod-runtime/functions.rs`).
+//      The Dylan `apply` builds that SOV from a leading-args + final-sequence
+//      argument list, exactly per the DRM `apply(fn, arg, …, last-seq)` shape.
+//
+// On top of those, the combinators below are N-ary in the COLLECTED data:
+//   * `apply(fn, arg, …, seq)` — spread `seq`'s elements after the leading args.
+//   * `compose(f, g, h, …)`    — N-function right-to-left composition.
+//   * `curry(f, a, b, …)`      — bind N leading arguments.
+//   * `rcurry(f, a, b, …)`     — bind N trailing arguments.
+//   * `always(value)`          — one-argument constant function.
+//
+// COMBINATOR-CLOSURE ARITY — the combinators collect a variable number of
+// FUNCTIONS / BOUND ARGUMENTS at definition time (via `#rest` on the top-level
+// `define function`, which works), and the closures they RETURN take ONE
+// call-site argument (`compose(…)(x)`, `curry(…)(x)`, …). A `#rest` parameter
+// on a returned (lifted) closure is not yet collected — the closure ABI stores
+// a fixed arity — so the call-site-variadic DRM form (e.g. a composite called
+// with several arguments) is the one remaining gap. The one-call-site-argument
+// form is what `map` / `choose` / `do` / `sort` reach for and what the corpus
+// exercises.
 
 // ─── identity ───────────────────────────────────────────────────────────────
 //
@@ -50,6 +62,54 @@ end function;
 
 define function complement (pred) => (negated)
   method (x) ~ %funcall1(pred, x) end
+end function;
+
+// ─── apply ────────────────────────────────────────────────────────────────────
+//
+// DRM `apply(function, #rest arguments)` — call `function` with arguments
+// SPREAD from a sequence. The DRM shape is `apply(fn, a, b, …, last-seq)`: every
+// argument after `fn` EXCEPT the final one is passed straight through; the final
+// argument MUST be a sequence whose elements are spread out as the remaining
+// call-site arguments. So `apply(\+, #(3, 4))` is `+(3, 4)` and
+// `apply(\+, 3, #(4))` is also `+(3, 4)`.
+//
+// We collect the post-`fn` actuals with `#rest more` (a `<simple-object-vector>`
+// of all arguments after `fn`). Its LAST element is the spread sequence; the
+// preceding `lead` elements are spread directly. We build one combined
+// `<simple-object-vector>` argv = [lead-args …, elements-of-final-seq …] then
+// hand it to `%apply` (the `nod_apply` runtime trampoline). `nod_apply` reads
+// argv's runtime length and dispatches to the matching callee arity (0..8 — the
+// `MAX_APPLY_ARITY` cap; a longer argv signals a wrong-number-of-arguments
+// condition). The final sequence is walked with the forward-iteration protocol,
+// so it can be a list, vector, range, or any FIP-registered collection.
+//
+//   apply(fn, seq)            — 0 leading args; spread all of `seq`.
+//   apply(fn, a, b, …, seq)   — leading `a, b, …`, then spread `seq`.
+//   apply(fn, #())            — `seq` empty; calls a 0-argument `fn`.
+
+define function apply (fn, #rest more) => (result)
+  let nmore = %vector-size(more);
+  // `more` always holds at least the final sequence (the DRM requires a
+  // trailing sequence argument). `lead` is the count of leading spread-direct
+  // actuals; the element at index `lead` is the sequence to spread.
+  let lead = nmore - 1;
+  let seq = %vector-element(more, lead);
+  let total = lead + %collection-size(seq);
+  let argv = %make-sov(total);
+  // Copy the leading fixed actuals verbatim into the front of argv.
+  for (i from 0 below lead)
+    %vector-element-setter(%vector-element(more, i), argv, i);
+  end;
+  // Spread the final sequence's elements after the leading actuals (FIP walk,
+  // so any sequence shape — list / vector / range — works uniformly).
+  let state = %fip-init(seq);
+  let j = lead;
+  until (%fip-finished?(state))
+    %vector-element-setter(%fip-current-element(state), argv, j);
+    j := j + 1;
+    %fip-advance!(state);
+  end;
+  %apply(fn, argv)
 end function;
 
 // ─── choose-by ────────────────────────────────────────────────────────────────
@@ -84,43 +144,68 @@ end function;
 //
 // DRM `compose(f, g, …) => composite`. Returns a function that pipes its
 // argument right-to-left through the supplied functions: `compose(f, g)(x)`
-// is `f(g(x))`. The DRM form is variadic in the number of functions; the
-// two-function form shipped here is the overwhelmingly common case (and the
-// one the corpus reaches for). The returned closure captures `f` and `g` and
-// applies each with `%funcall1`, the single-argument funcall path. (The
-// N-function form needs `#rest` collection over the function list — deferred.)
+// is `f(g(x))`, and `compose(f, g, h)(x)` is `f(g(h(x)))`. The N functions are
+// collected with `#rest fns` (a `<simple-object-vector>`); the returned closure
+// captures that vector and threads its one argument leftward, applying each
+// function with `%funcall1`. `compose()` (no functions) returns the identity on
+// one argument. The two-function form is the common case; the N-function fold
+// is the DRM-faithful generalisation.
 
-define function compose (f, g) => (composite)
-  method (x) %funcall1(f, %funcall1(g, x)) end
+define function compose (#rest fns) => (composite)
+  method (x)
+    let n = %vector-size(fns);
+    let acc = x;
+    for (i from n - 1 to 0 by -1)
+      acc := %funcall1(%vector-element(fns, i), acc);
+    end;
+    acc
+  end
 end function;
 
 // ─── curry ──────────────────────────────────────────────────────────────────
 //
 // DRM `curry(function, arg, …) => curried`. Returns a function that, when
-// called, invokes `function` with the captured leading argument(s) PREPENDED
-// to the call-site arguments. The single-captured-argument form shipped here
-// returns `method (x) function(arg, x) end`: it binds ONE leading argument and
-// accepts ONE more at call time, applying the captured `function` value with
-// `%funcall2` (the multi-arg funcall path fixed this sprint). This covers the
-// canonical `curry(\+, n)` / `curry(\*, n)` adder/scaler idioms. (Binding more
-// than one leading arg, or accepting a variable number of trailing args, needs
-// `#rest` collection — deferred.)
+// called, invokes `function` with the captured leading argument(s) PREPENDED to
+// the call-site argument. The leading arguments are collected with `#rest pre`
+// (a `<simple-object-vector>`); the returned closure builds a fresh argument
+// vector `[pre …, x]`, then spreads it over `function` with `%apply`. So
+// `curry(\+, 1)(2)` is `+(1, 2)` (the canonical adder/scaler idiom) and
+// `curry(f, a, b)(c)` is `f(a, b, c)` for a ternary `f`. The returned closure
+// takes ONE call-site argument (see the COMBINATOR-CLOSURE ARITY note above).
 
-define function curry (fn, arg) => (curried)
-  method (x) %funcall2(fn, arg, x) end
+define function curry (fn, #rest pre) => (curried)
+  method (x)
+    let n = %vector-size(pre);
+    let argv = %make-sov(n + 1);
+    for (i from 0 below n)
+      %vector-element-setter(%vector-element(pre, i), argv, i);
+    end;
+    %vector-element-setter(x, argv, n);
+    %apply(fn, argv)
+  end
 end function;
 
 // ─── rcurry ───────────────────────────────────────────────────────────────────
 //
 // DRM `rcurry(function, arg, …) => rcurried`. The right-handed sibling of
-// `curry`: the captured argument(s) are APPENDED after the call-site arguments.
-// The single-captured-argument form returns `method (x) function(x, arg) end`,
-// applying the captured `function` value with `%funcall2`. Canonical use is
-// `rcurry(\-, n)` (subtract a constant) and `rcurry(\<, n)` (a "less-than-n"
-// predicate). (Multi-arg forms need `#rest` collection — deferred.)
+// `curry`: the captured argument(s) are APPENDED after the call-site argument.
+// The captured arguments are collected with `#rest post` (a
+// `<simple-object-vector>`); the returned closure builds `[x, post …]` and
+// spreads it over `function` with `%apply`. So `rcurry(\-, 1)(10)` is
+// `-(10, 1)` (subtract a constant) and `rcurry(f, b, c)(a)` is `f(a, b, c)`.
+// The returned closure takes ONE call-site argument (see the
+// COMBINATOR-CLOSURE ARITY note above).
 
-define function rcurry (fn, arg) => (rcurried)
-  method (x) %funcall2(fn, x, arg) end
+define function rcurry (fn, #rest post) => (rcurried)
+  method (x)
+    let n = %vector-size(post);
+    let argv = %make-sov(n + 1);
+    %vector-element-setter(x, argv, 0);
+    for (i from 0 below n)
+      %vector-element-setter(%vector-element(post, i), argv, i + 1);
+    end;
+    %apply(fn, argv)
+  end
 end function;
 
 // ─── always ───────────────────────────────────────────────────────────────────

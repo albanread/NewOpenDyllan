@@ -6003,9 +6003,13 @@ fn collect_top_level_names(m: &Module, user_classes: &HashMap<String, ClassId>) 
                 fn_arity.insert(name.clone(), params.len());
                 // Sprint 60: record the fixed (pre-`#rest`) param count so
                 // call-site lowering can collect the trailing actuals into
-                // the rest SOV slot.
+                // the rest SOV slot. Also publish it to the process-global
+                // `#rest`-callee registry so OTHER modules' call sites
+                // (e.g. user code calling the stdlib's `apply`) can collect
+                // too — the per-module `rest_fns` only covers this module.
                 if let Some(fixed) = rest_param_index(params) {
                     rest_fns.insert(name.clone(), fixed);
+                    nod_runtime::register_rest_callee(name, fixed);
                 }
             }
             // A 0-parameter `define method` is lowered as a plain
@@ -6021,6 +6025,32 @@ fn collect_top_level_names(m: &Module, user_classes: &HashMap<String, ClassId>) 
                     .unwrap_or(TypeEstimate::Top);
                 fns.insert(name.clone(), ret);
                 fn_arity.insert(name.clone(), 0);
+            }
+            // Sprint 60: a `define method` with a `#rest` parameter. These
+            // are produced by the stdlib loader's
+            // `rewrite_define_function_to_method` pass (which turns a
+            // `define function f (…, #rest r)` into a single-method generic
+            // on `<object>` so `f` is reachable from user code) — and could
+            // also be hand-written. Such a method stays a DISPATCHED generic
+            // (it has specialised params), but its callee ABI is still
+            // `fixed + 1`: the trailing actuals collect into one `#rest` SOV
+            // slot, exactly as for the `define function` form. We record the
+            // FIXED (pre-`#rest`) param count so the Dispatch call-site
+            // lowering collects the rest actuals before dispatching (see the
+            // `rest_fixed_count` branch in `lower_call`). Methods without a
+            // `#rest` param fall through and stay ordinary dispatched
+            // generics (not registered here).
+            Item::DefineMethod { name, params, .. }
+                if rest_param_index(params).is_some() =>
+            {
+                if let Some(fixed) = rest_param_index(params) {
+                    rest_fns.insert(name.clone(), fixed);
+                    // Publish to the process-global registry so cross-module
+                    // call sites collect the trailing actuals before
+                    // dispatching (the stdlib `apply` / `compose` / `curry` /
+                    // `rcurry` are reached this way from user modules).
+                    nod_runtime::register_rest_callee(name, fixed);
+                }
             }
             // GAP-002 fix + GAP-004: `define constant` and
             // `define variable` are both lowered as zero-arg "getter"
@@ -7795,16 +7825,29 @@ impl FunctionBuilder {
                 });
                 return Ok(dst);
             }
-            // Sprint 60: a DirectCall to a top-level function declared
-            // with a `#rest` parameter. The callee ABI is `fixed + 1`
-            // params: the `fixed` leading actuals, then ONE final slot
-            // holding a freshly-built `<simple-object-vector>` of the
-            // trailing actuals (positions >= fixed). We build that SOV
-            // here at the call site, keeping the callee's fixed-arity
-            // LLVM signature intact (no varargs). A call with fewer than
-            // `fixed` args is rejected; a call with exactly `fixed` args
-            // collects into a zero-length SOV.
-            if let Some(fixed) = ctx.top_names.rest_fixed_count(name) {
+            // Sprint 60: a callee declared with a `#rest` parameter. The
+            // callee ABI is `fixed + 1` params: the `fixed` leading actuals,
+            // then ONE final slot holding a freshly-built
+            // `<simple-object-vector>` of the trailing actuals (positions
+            // >= fixed). We build that SOV here at the call site, keeping the
+            // callee's fixed-arity LLVM signature intact (no varargs). A call
+            // with fewer than `fixed` args is rejected; a call with exactly
+            // `fixed` args collects into a zero-length SOV.
+            //
+            // The collapsed call has `fixed + 1` actuals. If the name is a
+            // dispatched generic (a `#rest` `define method` — including the
+            // single-method generics the stdlib loader rewrites every
+            // `define function f (…, #rest r)` into so `f` is reachable as a
+            // value), we DISPATCH on those `fixed + 1` actuals — the rest SOV
+            // sits in the final `<object>`-specialised slot, matching the
+            // method's `param_count`. Otherwise (a plain `define function`)
+            // we DirectCall the body by name. Either way the callee body sees
+            // its `#rest` binding as the collected SOV in the final slot.
+            if let Some(fixed) = ctx
+                .top_names
+                .rest_fixed_count(name)
+                .or_else(|| nod_runtime::rest_callee_fixed_count(name))
+            {
                 if arg_temps.len() < fixed {
                     return Err(LoweringError::Unsupported {
                         span,
@@ -7817,6 +7860,24 @@ impl FunctionBuilder {
                 let rest_sov = self.emit_build_sov(&arg_temps[fixed..]);
                 let mut call_args: Vec<TempId> = arg_temps[..fixed].to_vec();
                 call_args.push(rest_sov);
+                // A `#rest` generic (dispatched method) is registered in
+                // `generics`/the runtime dispatch table but NOT in
+                // `top_names.fns` (only `define function` and 0-param methods
+                // land there). Route it through Dispatch; a `#rest`
+                // `define function` (in `top_names`) takes the DirectCall arm.
+                let is_generic = !ctx.top_names.contains(name)
+                    && (ctx.generics.contains(name)
+                        || nod_runtime::is_generic_defined(name));
+                if is_generic {
+                    let dst = self.fresh_temp(TypeEstimate::Top);
+                    self.push(Computation::Dispatch {
+                        dst,
+                        generic_name: name.clone(),
+                        args: call_args,
+                        safepoint_roots: Vec::new(),
+                    });
+                    return Ok(dst);
+                }
                 let ret = ctx
                     .top_names
                     .return_type(name)
