@@ -40,7 +40,7 @@ use crate::codegen::{
     // Sprint 42a — <byte-string> primitives.
     NOD_BYTE_STRING_ALLOCATE_SYMBOL, NOD_BYTE_STRING_COPY_BYTES_SYMBOL,
     NOD_BYTE_STRING_ELEMENT_SETTER_SYMBOL, NOD_BYTE_STRING_ELEMENT_SYMBOL,
-    NOD_BYTE_STRING_SIZE_SYMBOL,
+    NOD_BYTE_STRING_SIZE_SYMBOL, NOD_CHAR_CODE_SYMBOL, NOD_CODE_CHAR_SYMBOL,
     // Collection-classes lever (Part A2) — <bit-vector> + word bitwise ops.
     NOD_BIT_VECTOR_ALLOCATE_SYMBOL, NOD_BIT_VECTOR_COUNT_SYMBOL, NOD_BIT_VECTOR_REF_SYMBOL,
     NOD_BIT_VECTOR_SET_SYMBOL, NOD_BIT_VECTOR_SIZE_SYMBOL,
@@ -403,6 +403,14 @@ impl<'ctx> Jit<'ctx> {
             (
                 module.get_function(NOD_BYTE_STRING_COPY_BYTES_SYMBOL),
                 nod_runtime::nod_byte_string_copy_bytes as *const () as *mut std::ffi::c_void,
+            ),
+            (
+                module.get_function(NOD_CHAR_CODE_SYMBOL),
+                nod_runtime::nod_char_code as *const () as *mut std::ffi::c_void,
+            ),
+            (
+                module.get_function(NOD_CODE_CHAR_SYMBOL),
+                nod_runtime::nod_code_char as *const () as *mut std::ffi::c_void,
             ),
             // Collection-classes lever (Part A2) — <bit-vector> + word bitwise ops.
             (
@@ -1457,6 +1465,8 @@ fn standard_extern_addresses() -> Vec<(&'static str, *mut std::ffi::c_void)> {
         (NOD_BYTE_STRING_ELEMENT_SYMBOL, nod_runtime::nod_byte_string_element as *const () as *mut std::ffi::c_void),
         (NOD_BYTE_STRING_ELEMENT_SETTER_SYMBOL, nod_runtime::nod_byte_string_element_setter as *const () as *mut std::ffi::c_void),
         (NOD_BYTE_STRING_COPY_BYTES_SYMBOL, nod_runtime::nod_byte_string_copy_bytes as *const () as *mut std::ffi::c_void),
+        (NOD_CHAR_CODE_SYMBOL, nod_runtime::nod_char_code as *const () as *mut std::ffi::c_void),
+        (NOD_CODE_CHAR_SYMBOL, nod_runtime::nod_code_char as *const () as *mut std::ffi::c_void),
         // Collection-classes lever (Part A2) — <bit-vector> + word bitwise ops.
         (NOD_BIT_VECTOR_ALLOCATE_SYMBOL, nod_runtime::nod_bit_vector_allocate as *const () as *mut std::ffi::c_void),
         (NOD_BIT_VECTOR_REF_SYMBOL, nod_runtime::nod_bit_vector_ref as *const () as *mut std::ffi::c_void),

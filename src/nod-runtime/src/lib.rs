@@ -259,7 +259,8 @@ pub use stack_map::{
 pub use static_area::StaticArea;
 pub use strings::{
     ByteString, nod_byte_string_allocate, nod_byte_string_copy_bytes, nod_byte_string_element,
-    nod_byte_string_element_setter, nod_byte_string_size, try_byte_string,
+    nod_byte_string_element_setter, nod_byte_string_size, nod_char_code, nod_code_char,
+    try_byte_string,
 };
 pub use structs::{
     c_struct_class_id, ensure_structs_registered, filetime_class_id, is_c_struct_instance,

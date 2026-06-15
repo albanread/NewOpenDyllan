@@ -431,6 +431,13 @@ pub const NOD_BYTE_STRING_ELEMENT_SYMBOL: &str = "nod_byte_string_element";
 pub const NOD_BYTE_STRING_ELEMENT_SETTER_SYMBOL: &str = "nod_byte_string_element_setter";
 pub const NOD_BYTE_STRING_COPY_BYTES_SYMBOL: &str = "nod_byte_string_copy_bytes";
 
+// `<character>` ↔ `<integer>` code-point conversion. `%char-code`
+// sign-extends its i32 char arg to the i64 ABI at the call boundary;
+// `%code-char` returns the code in the low 32 bits of an i64, truncated
+// back to the i32 `<character>` register by `coerce_call_result`.
+pub const NOD_CHAR_CODE_SYMBOL: &str = "nod_char_code";
+pub const NOD_CODE_CHAR_SYMBOL: &str = "nod_code_char";
+
 // Collection-classes lever (Part A2) — <bit-vector> + word bitwise ops.
 pub const NOD_BIT_VECTOR_ALLOCATE_SYMBOL: &str = "nod_bit_vector_allocate";
 pub const NOD_BIT_VECTOR_REF_SYMBOL: &str = "nod_bit_vector_ref";
@@ -496,6 +503,8 @@ const SPRINT_20B_PRIMITIVES: &[(&str, &str, usize)] = &[
     ("nod_byte_string_element", NOD_BYTE_STRING_ELEMENT_SYMBOL, 2),
     ("nod_byte_string_element_setter", NOD_BYTE_STRING_ELEMENT_SETTER_SYMBOL, 3),
     ("nod_byte_string_copy_bytes", NOD_BYTE_STRING_COPY_BYTES_SYMBOL, 5),
+    ("nod_char_code", NOD_CHAR_CODE_SYMBOL, 1),
+    ("nod_code_char", NOD_CODE_CHAR_SYMBOL, 1),
     // Collection-classes lever (Part A2) — <bit-vector> + word bitwise ops.
     ("nod_bit_vector_allocate", NOD_BIT_VECTOR_ALLOCATE_SYMBOL, 2),
     ("nod_bit_vector_ref", NOD_BIT_VECTOR_REF_SYMBOL, 2),
@@ -2856,6 +2865,7 @@ impl<'ctx, 'a> Emit<'ctx, 'a> {
                     Some(v) => v,
                     None => self.load_imm_nil()?.into(),
                 };
+                let v = self.coerce_call_result(*dst, v)?;
                 self.temps.insert(*dst, v);
             }
             Computation::Call { .. } => {
@@ -3765,10 +3775,20 @@ impl<'ctx, 'a> Emit<'ctx, 'a> {
         // liveness pass produced no live pointer-shaped temps) and the
         // bracketing is a no-op.
         let emitted = self.begin_emitted_safepoint(SafepointKind::DirectCall, safepoint_roots)?;
+        // Coerce each arg to the callee's DECLARED param width. A
+        // `<character>` temp is i32; the callee may want i64 (a runtime
+        // shim or an `<object>`-typed Dylan param) or i32 (a Dylan
+        // function with a `<character>`-typed param). Sext / trunc as
+        // needed so the call site matches the signature exactly.
+        let param_types = callee_fn.get_type().get_param_types();
         let arg_vals: Vec<BasicMetadataValueEnum<'ctx>> = args
             .iter()
-            .map(|a| self.temp_val(*a).into())
-            .collect();
+            .enumerate()
+            .map(|(i, a)| {
+                let want = param_types.get(i).copied();
+                Ok(self.coerce_arg_to_param(*a, want)?.into())
+            })
+            .collect::<Result<_, CodegenError>>()?;
         let site = self
             .builder
             .build_call(callee_fn, &arg_vals, &name)
@@ -3959,8 +3979,8 @@ impl<'ctx, 'a> Emit<'ctx, 'a> {
         let emitted = self.begin_emitted_safepoint(SafepointKind::DirectCall, safepoint_roots)?;
         let call_args: Vec<BasicMetadataValueEnum<'ctx>> = args
             .iter()
-            .map(|a| self.temp_val(*a).into())
-            .collect();
+            .map(|a| Ok(self.temp_val_as_word(*a)?.into()))
+            .collect::<Result<_, CodegenError>>()?;
         let site = self
             .builder
             .build_call(fn_, &call_args, &name)
@@ -4222,11 +4242,13 @@ impl<'ctx, 'a> Emit<'ctx, 'a> {
 
         // Snapshot arg SSA values after the safepoint bracket is in
         // place so every call path consistently reads the current temp
-        // binding at the actual call site.
+        // binding at the actual call site. `<character>` args are i32;
+        // the dispatch ABI (nod_dispatch + the method-fn fast path) is
+        // uniform i64, so widen each arg to the i64 Word shape here.
         let arg_vals: Vec<inkwell::values::IntValue<'ctx>> = args
             .iter()
-            .map(|t| self.temp_val(*t).into_int_value())
-            .collect();
+            .map(|t| Ok(self.temp_val_as_word(*t)?.into_int_value()))
+            .collect::<Result<_, CodegenError>>()?;
         let receiver = arg_vals[0];
 
         // ---- Compute r_class (i64) for the cache key. ----
@@ -4517,6 +4539,93 @@ impl<'ctx, 'a> Emit<'ctx, 'a> {
             .temps
             .get(&t)
             .unwrap_or_else(|| panic!("undefined TempId({})", t.0))
+    }
+
+    /// Coerce a temp value to the i64 runtime-call ABI. `<character>`
+    /// lowers to a raw i32 (its code), but every runtime shim takes its
+    /// args as i64 Words. Sign-extend the i32 char to i64 at the call
+    /// boundary so the LLVM call site matches the `(i64, …) -> i64`
+    /// declaration (otherwise the verifier rejects `i32` vs `i64`). All
+    /// other temps are already i64-shaped and pass through unchanged.
+    fn temp_val_as_word(&self, t: TempId) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let map_err = |e: inkwell::builder::BuilderError| CodegenError::Builder(e.to_string());
+        let v = self.temp_val(t);
+        if let BasicValueEnum::IntValue(iv) = v {
+            if iv.get_type().get_bit_width() == 32 {
+                let widened = self
+                    .builder
+                    .build_int_s_extend(iv, self.ctx.i64_type(), "char.widen")
+                    .map_err(map_err)?;
+                return Ok(widened.into());
+            }
+        }
+        Ok(v)
+    }
+
+    /// Coerce an argument temp to a callee's declared LLVM param type.
+    /// The only mismatch in practice is integer width: a `<character>`
+    /// temp is i32 while many callees declare i64 params (runtime shims,
+    /// `<object>`-typed Dylan params), and conversely an i64 integer temp
+    /// may flow into a `<character>`-typed (i32) Dylan param. Sign-extend
+    /// or truncate to match. `want == None` (variadic / unknown) falls
+    /// back to the i64 Word ABI via `temp_val_as_word`.
+    fn coerce_arg_to_param(
+        &self,
+        t: TempId,
+        want: Option<BasicMetadataTypeEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let map_err = |e: inkwell::builder::BuilderError| CodegenError::Builder(e.to_string());
+        let Some(BasicMetadataTypeEnum::IntType(want_int)) = want else {
+            // No declared int param type — default to the i64 Word ABI.
+            return self.temp_val_as_word(t);
+        };
+        let v = self.temp_val(t);
+        let BasicValueEnum::IntValue(iv) = v else {
+            return Ok(v);
+        };
+        let have_bits = iv.get_type().get_bit_width();
+        let want_bits = want_int.get_bit_width();
+        if have_bits == want_bits {
+            Ok(v)
+        } else if have_bits < want_bits {
+            Ok(self
+                .builder
+                .build_int_s_extend(iv, want_int, "arg.sext")
+                .map_err(map_err)?
+                .into())
+        } else {
+            Ok(self
+                .builder
+                .build_int_truncate(iv, want_int, "arg.trunc")
+                .map_err(map_err)?
+                .into())
+        }
+    }
+
+    /// Coerce a runtime-call result (always an i64 Word) back to the dst
+    /// temp's register shape. The only mismatch is a `<character>` dst:
+    /// its register type is i32, but the call returned i64 (the `%code-char`
+    /// primitive returns its code in the low 32 bits of an i64). Truncate
+    /// to i32 so downstream char temps stay same-width. All other dst
+    /// types are i64-shaped and the value passes through unchanged.
+    fn coerce_call_result(
+        &self,
+        dst: TempId,
+        v: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let map_err = |e: inkwell::builder::BuilderError| CodegenError::Builder(e.to_string());
+        if matches!(self.func.temp_type(dst), TypeEstimate::Character) {
+            if let BasicValueEnum::IntValue(iv) = v {
+                if iv.get_type().get_bit_width() != 32 {
+                    let narrowed = self
+                        .builder
+                        .build_int_truncate(iv, self.ctx.i32_type(), "char.trunc")
+                        .map_err(map_err)?;
+                    return Ok(narrowed.into());
+                }
+            }
+        }
+        Ok(v)
     }
 
     /// Produce the canonical block-entry SSA value for function parameter
