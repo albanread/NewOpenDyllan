@@ -62,6 +62,7 @@ mod bitvectors;
 mod c_types;
 mod callbacks;
 mod classes;
+pub mod class_pins;
 mod closures;
 mod collections;
 #[cfg(windows)]
@@ -908,7 +909,7 @@ pub struct UserClassSpec {
 /// Both addresses are stable for the process lifetime — the codegen
 /// layer can bake them into LLVM `i64` constants.
 pub fn register_user_class_metadata(spec: UserClassSpec) -> (ClassId, *const ClassMetadata) {
-    let id = allocate_user_class_id();
+    let id = classes::allocate_user_class_id_named(&spec.name);
     let instance_size = std::mem::size_of::<Wrapper>() + 8 * spec.slots.len();
     let md = ClassMetadata {
         id,

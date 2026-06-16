@@ -680,7 +680,9 @@ fn with_registry<R>(f: impl FnOnce(&mut Registry) -> R) -> R {
         }
         *guard = Some(Registry {
             entries,
-            next_user_id: ClassId::FIRST_USER,
+            // User (per-program `define class`) ids begin ABOVE the pinned
+            // library band so they don't depend on the library class count.
+            next_user_id: crate::class_pins::PIN_CEILING,
             next_shim_id: ClassId::FIRST_SHIM,
         });
     }
@@ -771,6 +773,36 @@ pub fn allocate_user_class_id() -> ClassId {
     })
 }
 
+/// Name-keyed class-id allocation — the stable replacement for
+/// [`allocate_user_class_id`] at the class-registration funnel.
+///
+/// A LIBRARY class (runtime-seeded `ensure_*` or stdlib `define class`) gets
+/// its STABLE id from the name->id pin table ([`crate::class_pins`]),
+/// independent of registration order. A per-program USER class (not pinned)
+/// allocates from the user band, which begins at `PIN_CEILING` (above every
+/// pinned library id) so user ids do not depend on the library class count.
+/// The shim band is unchanged.
+///
+/// This is what makes adding/removing/reordering a stdlib class NOT renumber
+/// any other class — eliminating the recurring AOT/shim class-id drift.
+pub fn allocate_user_class_id_named(name: &str) -> ClassId {
+    if shim_class_band_active() {
+        return with_registry(|reg| {
+            let id = ClassId(reg.next_shim_id);
+            reg.next_shim_id += 1;
+            id
+        });
+    }
+    if let Some(pid) = crate::class_pins::pinned_id(name) {
+        return ClassId(pid);
+    }
+    with_registry(|reg| {
+        let id = ClassId(reg.next_user_id);
+        reg.next_user_id += 1;
+        id
+    })
+}
+
 /// Find a user-class id by name. Searches the seed table first, then
 /// user classes. Returns `None` if not found.
 pub fn find_class_id_by_name(name: &str) -> Option<ClassId> {
@@ -854,7 +886,7 @@ pub fn _reset_user_classes_for_tests() {
         // the process.
         reg.entries
             .retain(|p| !p.is_null() && unsafe { (**p).id.0 } < ClassId::FIRST_USER);
-        reg.next_user_id = ClassId::FIRST_USER;
+        reg.next_user_id = crate::class_pins::PIN_CEILING;
         // Sprint 51e — the retain above already drops shim-band entries
         // (their ids are `>= FIRST_SHIM > FIRST_USER`); reset the shim
         // counter too so a re-lower starts both bands from a clean seed.

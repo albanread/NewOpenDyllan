@@ -300,7 +300,7 @@ fn register_struct(name: &str, parent: ClassId, byte_size: usize) -> (ClassId, *
     use std::sync::atomic::AtomicBool;
     use std::sync::RwLock;
 
-    let id = crate::allocate_user_class_id();
+    let id = crate::classes::allocate_user_class_id_named(name);
     // CPL: [self, parent, ...parent's cpl tail]
     let parent_md = class_metadata_for(parent);
     let mut cpl = vec![id];
