@@ -2063,7 +2063,28 @@ impl<'a> Parser<'a> {
                     self.bump();
                     modifiers.push(m);
                 }
-                _ => break,
+                _ => {
+                    // Unknown leading adjective (e.g. `made-inline`): if a
+                    // known modifier or a hard definer keyword follows, this
+                    // word is an (ignored) adjective — drop it and keep
+                    // scanning. Otherwise it is the definer keyword itself
+                    // (a macro definer like `test`/`suite`), so stop.
+                    let next_is_adj_or_definer =
+                        if let Some(nt) = self.tokens.get(self.pos + 1).copied() {
+                            nt.kind == TokenKind::Ident && {
+                                let nw = self.token_text(nt);
+                                Modifier::from_word(nw).is_some()
+                                    || is_hard_definer_keyword(nw)
+                            }
+                        } else {
+                            false
+                        };
+                    if next_is_adj_or_definer {
+                        self.bump();
+                        continue;
+                    }
+                    break;
+                }
             }
         }
         // `define ... domain` is a sealing form; Sprint 15. Recognise the
@@ -3413,6 +3434,27 @@ impl<'a> Parser<'a> {
 
 fn join(a: Span, b: Span) -> Span {
     Span::new(a.file_id, a.lo.min(b.lo), a.hi.max(b.hi))
+}
+
+/// The built-in `define <word>` definer keywords (everything else after
+/// `define` + adjectives is a macro definer, e.g. `test`/`suite`/`benchmark`).
+/// Used to recognise unknown adjectives: in `define made-inline sealed class …`
+/// the unrecognised `made-inline` is an adjective because a hard definer
+/// (`class`) follows it.
+fn is_hard_definer_keyword(w: &str) -> bool {
+    matches!(
+        w,
+        "constant"
+            | "variable"
+            | "function"
+            | "c-function"
+            | "method"
+            | "generic"
+            | "class"
+            | "library"
+            | "module"
+            | "macro"
+    )
 }
 
 /// Sprint 25: tokens that, when seen immediately after `<ident>(args)`,

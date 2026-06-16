@@ -2746,10 +2746,18 @@ fn lower_module_full_inner(
             }
             Item::DefineLibrary { .. } | Item::DefineModule { .. } => {}
             Item::DefineOther { span, keyword, .. } => {
-                errors.push(LoweringError::Unsupported {
-                    span: *span,
-                    message: format!("`define {keyword}` not lowered in Sprint 06"),
-                });
+                // `define [sealed] domain GF (types…);` is a sealing
+                // declaration — advisory only, with no runtime lowering in
+                // our model. Accept it as a no-op. Other unknown definers are
+                // unexpanded macro calls and remain errors.
+                if keyword == "domain" {
+                    // no-op
+                } else {
+                    errors.push(LoweringError::Unsupported {
+                        span: *span,
+                        message: format!("`define {keyword}` not lowered in Sprint 06"),
+                    });
+                }
             }
             Item::Expr(_) => {}
         }
