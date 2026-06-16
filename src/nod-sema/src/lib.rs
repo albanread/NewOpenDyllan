@@ -246,6 +246,41 @@ pub fn dump_dfm_for_file(path: &Path) -> Result<String, DumpError> {
     Ok(nod_dfm::format_dfm_module(&lm.functions))
 }
 
+/// Multi-file `dump-dfm`: parse every file (each with its own preamble),
+/// concatenate their items into one combined `Module`, then macro-expand and
+/// lower exactly once — the same AST-level merge `compile_files_for_aot` uses
+/// for multi-file builds. This is the single-library compile check: cross-file
+/// references (a `$tiny-size` defined in one file and used in its siblings)
+/// resolve because everything lands in one `module.items` list. The merged
+/// module reports the first file's preamble; files needn't all declare the same
+/// `Module:` (this is a compile check, not a link), so no header check is done.
+pub fn dump_dfm_for_files(paths: &[&Path]) -> Result<String, DumpError> {
+    stdlib::ensure_loaded();
+    let mut sm = nod_reader::SourceMap::new();
+    let mut merged: Option<nod_reader::Module> = None;
+    for path in paths {
+        let src = std::fs::read_to_string(path).map_err(DumpError::Io)?;
+        let file_id = sm
+            .add(path.to_path_buf(), src.clone())
+            .map_err(DumpError::SourceMap)?;
+        let toks = nod_reader::lex(&src, file_id);
+        let pre = nod_reader::scan_preamble(&src);
+        let mut parsed =
+            parse_user_module(&src, &toks, pre.as_ref()).map_err(DumpError::Parse)?;
+        match &mut merged {
+            None => merged = Some(parsed),
+            Some(m) => m.items.append(&mut parsed.items),
+        }
+    }
+    let mut module = match merged {
+        Some(m) => m,
+        None => return Ok(String::new()),
+    };
+    expand_with_stdlib_macros(&mut module, &sm).map_err(DumpError::Macro)?;
+    let lm = lower_module_full(&module).map_err(DumpError::Lower)?;
+    Ok(nod_dfm::format_dfm_module(&lm.functions))
+}
+
 /// Sprint 53 — driver helper: read a Dylan file, parse + expand + run the
 /// sema recording walk, and return the deterministic `SemaModel` dump
 /// (top-names, generics, classes, sealing). This is the `dump-sema`

@@ -219,8 +219,12 @@ enum Command {
     },
     /// Lex + parse + lower a Dylan source file and print the DFM IR.
     DumpDfm {
-        /// Path to a `.dylan` source file.
-        input: PathBuf,
+        /// One or more `.dylan` source files. With more than one path the
+        /// files are compiled together as a single library unit (AST-level
+        /// merge), so cross-file references resolve. A single path is the
+        /// original per-file behaviour, byte-for-byte.
+        #[arg(required = true, num_args = 1..)]
+        input: Vec<PathBuf>,
     },
     /// Sprint 53 — print the sema recording model (top-names, generics,
     /// classes, sealing) as deterministic text. The byte-identical oracle
@@ -1191,8 +1195,17 @@ fn run_build_full(
     }
 }
 
-fn run_dump_dfm(input: &std::path::Path) -> ExitCode {
-    match nod_sema::dump_dfm_for_file(input) {
+fn run_dump_dfm(inputs: &[PathBuf]) -> ExitCode {
+    // N==1 routes through the original single-file path to keep its output
+    // byte-identical (the in-tree dump-dfm gate compares it). N>1 merges the
+    // files into one library unit so cross-file references resolve.
+    let result = if inputs.len() == 1 {
+        nod_sema::dump_dfm_for_file(&inputs[0])
+    } else {
+        let refs: Vec<&std::path::Path> = inputs.iter().map(|p| p.as_path()).collect();
+        nod_sema::dump_dfm_for_files(&refs)
+    };
+    match result {
         Ok(dump) => {
             print!("{dump}");
             ExitCode::SUCCESS
