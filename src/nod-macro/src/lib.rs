@@ -1800,6 +1800,14 @@ fn expand_expr(e: &mut Expr, ctx: &mut ExpansionCtx<'_>, errs: &mut Vec<MacroErr
     // Then try to recognise this node as a macro call.
     let Some(name) = macro_call_name(e) else { return };
     let Some(def) = ctx.table.get(&name).cloned() else { return };
+    // Definition macros (every rule begins with the literal `define`, e.g.
+    // `define test …`) only expand at definition sites (`Item::DefineOther`,
+    // handled in `expand_module`). A bare `test(...)` in expression position is
+    // an ordinary call — e.g. a `#key test` parameter named `test` shadowing
+    // the macro — not a macro use, so leave it alone.
+    if is_definition_macro(&def) {
+        return;
+    }
     if ctx.depth >= ctx.depth_limit {
         errs.push(MacroError::ExpansionDepthExceeded {
             call_span: e.span(),
@@ -1989,6 +1997,22 @@ fn expand_one(
     //    a mixed template-vs-call span re-lexes garbage.
     set_top_span(&mut parsed, e.span());
     Ok(parsed)
+}
+
+/// A macro is a *definition macro* when every rule's pattern begins with the
+/// literal `define` (e.g. `define test …`, `define suite …`). Such macros are
+/// only meaningful at a definition site (`Item::DefineOther`); they must NOT be
+/// expanded when their name appears in expression/call position (where it is an
+/// ordinary identifier — a variable or `#key` parameter that happens to share
+/// the macro's name).
+fn is_definition_macro(def: &MacroDef) -> bool {
+    !def.rules.is_empty()
+        && def.rules.iter().all(|r| {
+            matches!(
+                r.pattern.first(),
+                Some(PatternElem::Literal { text, .. }) if text == "define"
+            )
+        })
 }
 
 /// Expand a definition macro: a top-level `define <word> … end` whose `<word>`
