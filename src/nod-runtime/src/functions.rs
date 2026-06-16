@@ -1537,6 +1537,30 @@ pub unsafe extern "C-unwind" fn nod_op_gt(a: u64, b: u64) -> u64 {
     if av > bv { imm.true_.raw() } else { imm.false_.raw() }
 }
 
+/// `\^` — integer exponentiation `base ^ exp`. Non-fixnum inputs decode to
+/// 0. A negative exponent yields 0 (integer `^` is only defined for
+/// non-negative exponents here; rationals aren't modelled yet).
+///
+/// # Safety
+///
+/// No preconditions. Inputs and output are Dylan tagged Words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C-unwind" fn nod_op_pow(a: u64, b: u64) -> u64 {
+    let base = Word::from_raw(a).as_fixnum().unwrap_or(0);
+    let exp = Word::from_raw(b).as_fixnum().unwrap_or(0);
+    let mut acc: i64 = 1;
+    if exp >= 0 {
+        let mut i: i64 = 0;
+        while i < exp {
+            acc = acc.wrapping_mul(base);
+            i += 1;
+        }
+    } else {
+        acc = 0;
+    }
+    Word::from_fixnum(acc).unwrap_or(Word::from_raw(0)).raw()
+}
+
 /// `\<=` — integer less-than-or-equal.
 ///
 /// # Safety
@@ -1674,6 +1698,7 @@ pub fn ensure_operator_shims_registered() {
             register_rust_function("~=", 2, nod_op_ne as *const u8);
             register_rust_function("~==", 2, nod_op_ne_eq as *const u8);
             register_rust_function("instance?", 2, nod_instance_p as *const u8);
+            register_rust_function("^", 2, nod_op_pow as *const u8);
         }
     });
 }

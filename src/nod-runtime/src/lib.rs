@@ -233,7 +233,7 @@ pub use functions::{
     make_generic_trampoline_ref, make_wrong_number_of_arguments_error, nod_apply, nod_funcall0,
     nod_funcall1, nod_funcall2, nod_funcall3, nod_funcall4, nod_funcall5, nod_instance_p,
     nod_make_closure, nod_make_function_ref, nod_make_rest_closure, nod_op_eq, nod_op_eq_eq,
-    nod_op_gt, nod_op_lt,
+    nod_op_gt, nod_op_lt, nod_op_pow,
     nod_op_minus, nod_op_ne, nod_op_ne_eq, nod_op_plus, nod_op_times, register_jit_function,
     register_rust_function, wrong_number_of_arguments_error_class_id,
 };

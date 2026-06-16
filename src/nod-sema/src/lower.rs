@@ -6749,6 +6749,21 @@ impl FunctionBuilder {
                     }
                     return Ok(eq_dst);
                 }
+                // `a ^ b` exponentiation has no inline PrimOp — route it to
+                // the runtime `nod_op_pow` shim (integer power) by its real
+                // symbol so AOT codegen can link it (a callee literally named
+                // `^` isn't a linkable symbol).
+                if *op == BinOp::Pow {
+                    let dst = self.fresh_temp(TypeEstimate::Integer);
+                    self.push(Computation::DirectCall {
+                        dst,
+                        callee: "nod_op_pow".to_string(),
+                        args: vec![l, r],
+                        safepoint_roots: Vec::new(),
+                        is_no_alloc: false,
+                    });
+                    return Ok(dst);
+                }
                 let op = select_binop(*op, lt, rt, *span)?;
                 let dst = self.fresh_temp(op.result_type());
                 self.push(Computation::PrimOp {
