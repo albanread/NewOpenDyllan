@@ -749,7 +749,28 @@ impl<'a> Parser<'a> {
             }
             TokenKind::String | TokenKind::StringRaw | TokenKind::StringMulti => {
                 self.bump();
-                Ok(Expr::String(t.span, self.token_text(t).to_string()))
+                let mut raw = self.token_text(t).to_string();
+                let mut span = t.span;
+                // Adjacent string-literal folding (DRM): consecutive plain
+                // `"..."` literals concatenate into one constant, e.g.
+                //   format-out("part one\n"
+                //              "part two\n", ...)
+                // Splice by dropping our trailing quote and the next leading
+                // quote so escapes stay raw for decode_dylan_string_literal.
+                if matches!(t.kind, TokenKind::String) {
+                    while matches!(self.peek_kind(), TokenKind::String) && raw.ends_with('"') {
+                        let nt = self.peek();
+                        let next_raw = self.token_text(nt).to_string();
+                        if !next_raw.starts_with('"') {
+                            break;
+                        }
+                        self.bump();
+                        raw.truncate(raw.len() - 1);
+                        raw.push_str(&next_raw[1..]);
+                        span = join(span, nt.span);
+                    }
+                }
+                Ok(Expr::String(span, raw))
             }
             TokenKind::Char => {
                 self.bump();
