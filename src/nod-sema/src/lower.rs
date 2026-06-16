@@ -402,6 +402,7 @@ const LOWER_PRIMITIVE_TABLE: &[(&str, &str, usize, TypeEstimate)] = &[
     ("%table-values", "nod_table_values", 1, TypeEstimate::Top),
     ("%object-hash", "nod_object_hash", 1, TypeEstimate::Integer),
     ("%object-equal?", "nod_object_equal_p", 2, TypeEstimate::Boolean),
+    ("%subtype?", "nod_subtype_p", 2, TypeEstimate::Boolean),
     // Sprint 32 — closure → C function pointer trampolines. Each
     // primitive takes a `<function>` Word and returns a fixnum-tagged
     // `<c-pointer>` Word whose payload is the trampoline address Win32

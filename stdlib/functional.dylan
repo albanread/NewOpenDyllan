@@ -261,3 +261,11 @@ define function conjoin (#rest predicates) => (conjunction)
     result
   end
 end function;
+
+// `subtype?(t1, t2)` — is every instance of type `t1` also an instance of
+// `t2`? Implemented over the `%subtype?` primitive, which walks the class
+// precedence list for class types. (Limited/union/singleton types aren't
+// modelled in the lattice yet, so those answer #f.)
+define function subtype? (type1, type2) => (subtype? :: <boolean>)
+  %subtype?(type1, type2)
+end function;

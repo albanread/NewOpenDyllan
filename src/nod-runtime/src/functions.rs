@@ -1664,6 +1664,31 @@ pub unsafe extern "C-unwind" fn nod_instance_p(value: u64, class_word: u64) -> u
     }
 }
 
+/// `subtype?(t1, t2)` — is `t1` a subtype of `t2`? For class metadata Words
+/// this is "is `t2` in `t1`'s class precedence list" (`is_subclass`). Non-class
+/// Words (limited types, unions, singletons aren't modelled yet) return `#f`.
+///
+/// # Safety
+///
+/// No preconditions. Inputs are Dylan tagged Words; non-class Words yield `#f`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C-unwind" fn nod_subtype_p(t1: u64, t2: u64) -> u64 {
+    let imm = crate::literal_pool_immediates();
+    let (Some(md1), Some(md2)) = (
+        Word::from_raw(t1).as_ptr::<ClassMetadata>(),
+        Word::from_raw(t2).as_ptr::<ClassMetadata>(),
+    ) else {
+        return imm.false_.raw();
+    };
+    // SAFETY: a class Word's payload points at a pinned `ClassMetadata`.
+    let (id1, id2) = unsafe { ((*md1).id, (*md2).id) };
+    if crate::classes::is_subclass(id1, id2) {
+        imm.true_.raw()
+    } else {
+        imm.false_.raw()
+    }
+}
+
 /// Install the operator shims into `RUST_FUNCTION_REGISTRY`. Idempotent
 /// — safe to call repeatedly. Called from the `LiteralPool`
 /// initialiser path (via `ensure_registered`).

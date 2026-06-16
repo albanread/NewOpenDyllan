@@ -422,6 +422,7 @@ pub const NOD_TABLE_VALUES_SYMBOL: &str = "nod_table_values";
 pub const NOD_OBJECT_HASH_SYMBOL: &str = "nod_object_hash";
 pub const NOD_OBJECT_EQUAL_P_SYMBOL: &str = "nod_object_equal_p";
 pub const NOD_OP_POW_SYMBOL: &str = "nod_op_pow";
+pub const NOD_SUBTYPE_P_SYMBOL: &str = "nod_subtype_p";
 
 // Sprint 42a — <byte-string> primitives. Five-op minimum surface; all
 // user-visible byte-string methods (`size`, `element`, `concatenate`,
@@ -500,6 +501,7 @@ const SPRINT_20B_PRIMITIVES: &[(&str, &str, usize)] = &[
     ("nod_object_hash", NOD_OBJECT_HASH_SYMBOL, 1),
     ("nod_object_equal_p", NOD_OBJECT_EQUAL_P_SYMBOL, 2),
     ("nod_op_pow", NOD_OP_POW_SYMBOL, 2),
+    ("nod_subtype_p", NOD_SUBTYPE_P_SYMBOL, 2),
     // Sprint 42a — <byte-string> primitives.
     ("nod_byte_string_allocate", NOD_BYTE_STRING_ALLOCATE_SYMBOL, 1),
     ("nod_byte_string_size", NOD_BYTE_STRING_SIZE_SYMBOL, 1),
