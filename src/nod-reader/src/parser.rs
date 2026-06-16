@@ -1825,6 +1825,15 @@ impl<'a> Parser<'a> {
         if self.peek_ident_is("in") {
             self.bump();
             let coll = self.parse_expr_until_for_terminator()?;
+            // Optional `using PROTOCOL` clause, e.g.
+            // `i in s using backward-iteration-protocol`. We only implement
+            // the default forward iteration protocol, so parse and ignore the
+            // protocol expression (the loop iterates forward). Documented in
+            // docs/reference/known-limitations.md.
+            if self.peek_ident_is("using") {
+                self.bump();
+                let _ = self.parse_expr_until_for_terminator()?;
+            }
             let span = join(var_tok.span, coll.span());
             return Ok(ForClause::In { span, var, coll });
         }

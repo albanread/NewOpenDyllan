@@ -201,6 +201,21 @@ or a standing design trade-off are kept here.
 * **Scope**: small–medium (`stdlib/macros.dylan` once the engine supports it).
 * **Status**: open (single-binding works).
 
+## `for … in coll using PROTOCOL` ignores the protocol (forward only)
+
+* **Symptom**: `for (i in s using backward-iteration-protocol) … end` parses and
+  compiles, but iterates **forward** — the `using` protocol expression is parsed
+  and discarded.
+* **Cause**: the `for`-loop lowering only emits the default forward iteration
+  protocol (`%fip-init`/`%fip-finished?`/`%fip-current-element`/`%fip-advance!`).
+  There is no backward / custom-protocol FIP plumbing yet.
+* **Workaround**: none for backward iteration; forward `in` loops are correct.
+* **Planned fix**: a `%fip-init-with-protocol` family (or honour an explicit
+  `<iteration-protocol>` object) so `using` selects the direction/protocol.
+* **Scope**: small parser change already done (parse + ignore); medium runtime
+  work to honour it.
+* **Status**: open (parses; semantics forward-only).
+
 ## An unhandled signalled condition panics the JIT eval engine
 
 * **Symptom**: when front-end/expansion code signals a `<condition>` that no
