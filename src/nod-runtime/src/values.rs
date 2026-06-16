@@ -138,6 +138,66 @@ pub extern "C" fn nod_values_count() -> u64 {
     Word::fixnum_unchecked(count as i64).raw()
 }
 
+/// Build the rest-sequence `<simple-object-vector>` for a multiple-value
+/// `let (… #rest r) = form` binding.
+///
+/// `buf_start` is the first `VALUES_BUF` index to include (slots already
+/// consumed by explicit binders are skipped). `include_primary != 0` puts
+/// the form's primary return value (`primary`) as the FIRST element — the
+/// `let (#rest r)` case where there are no explicit binders, so the primary
+/// belongs in the rest sequence.
+///
+/// GC: `VALUES_BUF` entries are already GC roots
+/// ([`snapshot_active_values_roots`]) and `primary` is protected with a
+/// [`crate::make::RootGuard`], so both survive the SOV allocation and are
+/// read back (post-collection) afterwards. No allocation happens after the
+/// SOV is created, so the freshly-built vector stays valid while it fills.
+///
+/// # Safety
+///
+/// No preconditions beyond the standard tagged-Word ABI.
+#[unsafe(no_mangle)]
+pub unsafe extern "C-unwind" fn nod_collect_rest_values(
+    primary: u64,
+    buf_start_raw: u64,
+    include_primary_raw: u64,
+) -> u64 {
+    let buf_start = Word::from_raw(buf_start_raw).as_fixnum().unwrap_or(0).max(0) as usize;
+    let include_primary =
+        Word::from_raw(include_primary_raw).as_fixnum().unwrap_or(0) != 0;
+    let count = VALUES_COUNT.with(|c| c.get());
+    let n_extra = count.saturating_sub(buf_start);
+    let total = n_extra + if include_primary { 1 } else { 0 };
+
+    // Protect the primary across the (possibly collecting) SOV allocation.
+    let primary_local = Word::from_raw(primary);
+    let p_guard = crate::make::RootGuard::new(&primary_local);
+
+    let sov = crate::with_literal_pool(|pool| {
+        pool.heap.alloc_simple_object_vector(total, &pool.classes)
+    });
+    let sov_class = crate::with_literal_pool(|pool| pool.classes.simple_object_vector());
+
+    // Read the primary back through the guard (post-GC address) and fill.
+    let primary_v = p_guard.reload();
+    // SAFETY: `sov` is the SOV we just allocated; mutator is single-threaded
+    // and no allocation happens between here and the end of the fill.
+    let v = unsafe { crate::try_simple_object_vector_mut(sov, sov_class) }
+        .expect("freshly allocated SOV");
+    let slots = unsafe { v.slots_mut() };
+    let mut w = 0usize;
+    if include_primary {
+        slots[w] = primary_v;
+        w += 1;
+    }
+    for i in 0..n_extra {
+        slots[w] = VALUES_BUF.with(|buf| buf[buf_start + i].get());
+        w += 1;
+    }
+    drop(p_guard);
+    sov.raw()
+}
+
 /// GC root scanner — return a `*const Word` for each currently-live
 /// secondary-value entry. Called from `heap::snapshot_roots` so the
 /// extras stay reachable across any safepoint that happens between the

@@ -4889,19 +4889,20 @@ fn lower_function_inner_keyed(
                 value,
                 span,
             } => {
-                if rest.is_some() {
-                    return Err(LoweringError::Unsupported {
-                        span: *span,
-                        message: "`#rest` binder in `let` not supported yet".to_string(),
-                    });
-                }
-                if binders.is_empty() {
+                if let Some(rest_binder) = rest {
+                    // `let (a, b, #rest r) = form` — bind the explicit
+                    // binders from the multiple values, then collect the
+                    // remaining values into a fresh SOV bound to `r`.
+                    let t = b.lower_let_rest(binders, rest_binder, value, &mut env, ctx)?;
+                    if is_last {
+                        final_temp = Some(t);
+                    }
+                } else if binders.is_empty() {
                     return Err(LoweringError::Unsupported {
                         span: *span,
                         message: "`let` with no binders".to_string(),
                     });
-                }
-                if binders.len() > 1 {
+                } else if binders.len() > 1 {
                     // Sprint 47 — multi-binder `let (a, b, …) = expr`.
                     // See `docs/COMPILER_GAPS.md` GAP-003. Delegates to
                     // the shared helper that runs the SBCL-style
@@ -8644,6 +8645,86 @@ impl FunctionBuilder {
     ///
     /// Returns the temp bound to `binders[0]` — that's the "value of
     /// the let" for callers that care (loop-body / Expr::Stmt contexts).
+    /// `let (a, b, … #rest r) = form` — multiple-value bind with a rest
+    /// collector. Binds each explicit binder from the multiple values (the
+    /// primary return + the secondary-values buffer), then collects the
+    /// remaining values into a fresh `<simple-object-vector>` bound to `r`.
+    /// Returns the primary value temp.
+    fn lower_let_rest(
+        &mut self,
+        binders: &[Binder],
+        rest: &Binder,
+        value: &Expr,
+        env: &mut LocalEnv,
+        ctx: &LowerCtx,
+    ) -> Result<TempId, LoweringError> {
+        // 1. Clear the secondary-values buffer before evaluating the RHS.
+        let clear = self.fresh_temp(TypeEstimate::Top);
+        self.push(Computation::DirectCall {
+            dst: clear,
+            callee: "nod_values_clear".to_string(),
+            args: Vec::new(),
+            safepoint_roots: Vec::new(),
+            is_no_alloc: false,
+        });
+        // 2. Evaluate the RHS — primary via the ordinary ABI, extras in the
+        //    TLS buffer.
+        let primary = self.lower_expr(value, env, ctx)?;
+        // 3. Bind the explicit binders: binder[0] = primary; binder[i] =
+        //    buffer[i-1] (cell-promoted when captured).
+        let mut bind = |this: &mut Self, name: &str, t: TempId, env: &mut LocalEnv| {
+            let bound = if this.cell_ctx.cell_locals.contains(name) {
+                let cell = this.fresh_temp(TypeEstimate::Top);
+                this.push(Computation::DirectCall {
+                    dst: cell,
+                    callee: "nod_make_cell".to_string(),
+                    args: vec![t],
+                    safepoint_roots: Vec::new(),
+                    is_no_alloc: false,
+                });
+                cell
+            } else {
+                t
+            };
+            env.insert(name.to_string(), bound);
+        };
+        for (i, bnd) in binders.iter().enumerate() {
+            let t = if i == 0 {
+                primary
+            } else {
+                let idx = self.emit_fixnum_const((i - 1) as i64);
+                let v = self.fresh_temp(TypeEstimate::Top);
+                self.push(Computation::DirectCall {
+                    dst: v,
+                    callee: "nod_values_get".to_string(),
+                    args: vec![idx],
+                    safepoint_roots: Vec::new(),
+                    is_no_alloc: false,
+                });
+                v
+            };
+            bind(self, &bnd.name, t, env);
+        }
+        // 4. Collect the rest. With no explicit binders the primary belongs
+        //    in the rest sequence (include_primary, buf_start 0); otherwise
+        //    skip the buffer slots already bound (buf_start = len-1).
+        let include_primary = binders.is_empty();
+        let buf_start = if binders.is_empty() { 0 } else { binders.len() - 1 };
+        let bs = self.emit_fixnum_const(buf_start as i64);
+        let inc = self.emit_fixnum_const(if include_primary { 1 } else { 0 });
+        let rest_sov = self.fresh_temp(TypeEstimate::Top);
+        self.push(Computation::DirectCall {
+            dst: rest_sov,
+            callee: "nod_collect_rest_values".to_string(),
+            args: vec![primary, bs, inc],
+            safepoint_roots: vec![primary],
+            is_no_alloc: false,
+        });
+        // 5. Bind the rest binder.
+        bind(self, &rest.name, rest_sov, env);
+        Ok(primary)
+    }
+
     fn lower_let_multi_binders(
         &mut self,
         binders: &[Binder],
@@ -9354,19 +9435,14 @@ impl FunctionBuilder {
             Statement::Let {
                 binders, rest, value, span,
             } => {
-                if rest.is_some() {
-                    return Err(LoweringError::Unsupported {
-                        span: *span,
-                        message: "`#rest` binder in `let` not supported yet".to_string(),
-                    });
-                }
-                if binders.is_empty() {
+                if let Some(rest_binder) = rest {
+                    self.lower_let_rest(binders, rest_binder, value, env, ctx)?;
+                } else if binders.is_empty() {
                     return Err(LoweringError::Unsupported {
                         span: *span,
                         message: "`let` with no binders".to_string(),
                     });
-                }
-                if binders.len() > 1 {
+                } else if binders.len() > 1 {
                     // Sprint 47 — multi-binder `let` inside a loop body.
                     self.lower_let_multi_binders(binders, value, env, ctx)?;
                 } else {
@@ -9430,19 +9506,15 @@ impl FunctionBuilder {
             Statement::Let {
                 binders, rest, value, span,
             } => {
-                if rest.is_some() {
-                    return Err(LoweringError::Unsupported {
-                        span: *span,
-                        message: "`#rest` binder in `let` not supported yet".to_string(),
-                    });
-                }
-                if binders.is_empty() {
+                if let Some(rest_binder) = rest {
+                    let t = self.lower_let_rest(binders, rest_binder, value, env, ctx)?;
+                    Ok(t)
+                } else if binders.is_empty() {
                     return Err(LoweringError::Unsupported {
                         span: *span,
                         message: "`let` with no binders".to_string(),
                     });
-                }
-                if binders.len() > 1 {
+                } else if binders.len() > 1 {
                     // Sprint 47 — multi-binder `let` in expression-stmt context.
                     let t = self.lower_let_multi_binders(binders, value, env, ctx)?;
                     Ok(t)
@@ -10972,19 +11044,15 @@ fn lower_statements_into_inner(
                 value,
                 span,
             } => {
-                if rest.is_some() {
-                    return Err(LoweringError::Unsupported {
-                        span: *span,
-                        message: "`#rest` binder in `let` not supported yet".to_string(),
-                    });
-                }
-                if binders.is_empty() {
+                if let Some(rest_binder) = rest {
+                    let t = b.lower_let_rest(binders, rest_binder, value, env, ctx)?;
+                    b.set_last_temp(t);
+                } else if binders.is_empty() {
                     return Err(LoweringError::Unsupported {
                         span: *span,
                         message: "`let` with no binders".to_string(),
                     });
-                }
-                if binders.len() > 1 {
+                } else if binders.len() > 1 {
                     // Sprint 47 — multi-binder `let` in lifted-thunk context.
                     let t = b.lower_let_multi_binders(binders, value, env, ctx)?;
                     b.set_last_temp(t);

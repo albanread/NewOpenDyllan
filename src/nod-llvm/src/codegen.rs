@@ -279,6 +279,7 @@ pub const NOD_VALUES_CLEAR_SYMBOL: &str = "nod_values_clear";
 pub const NOD_VALUES_SET_SYMBOL: &str = "nod_values_set";
 pub const NOD_VALUES_GET_SYMBOL: &str = "nod_values_get";
 pub const NOD_VALUES_COUNT_SYMBOL: &str = "nod_values_count";
+pub const NOD_COLLECT_REST_VALUES_SYMBOL: &str = "nod_collect_rest_values";
 
 // ─── Sprint 24 — closures: <cell> and <environment> ───────────────────────
 pub const NOD_MAKE_CELL_SYMBOL: &str = "nod_make_cell";
@@ -538,6 +539,7 @@ const SPRINT_20B_PRIMITIVES: &[(&str, &str, usize)] = &[
     ("nod_values_clear", NOD_VALUES_CLEAR_SYMBOL, 0),
     ("nod_values_set", NOD_VALUES_SET_SYMBOL, 2),
     ("nod_values_get", NOD_VALUES_GET_SYMBOL, 1),
+    ("nod_collect_rest_values", NOD_COLLECT_REST_VALUES_SYMBOL, 3),
     ("nod_values_count", NOD_VALUES_COUNT_SYMBOL, 0),
     // GAP-004 — `define variable` shims (name-by-byte-string).
     ("nod_var_get_by_name", NOD_VAR_GET_BY_NAME_SYMBOL, 1),

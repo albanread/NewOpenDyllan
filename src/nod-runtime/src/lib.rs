@@ -283,7 +283,7 @@ pub use tables::{
 };
 pub use tracer::{HeapObjectInfo, HeapTrace, trace_heap};
 pub use values::{
-    nod_values_clear, nod_values_count, nod_values_get, nod_values_set,
+    nod_collect_rest_values, nod_values_clear, nod_values_count, nod_values_get, nod_values_set,
     snapshot_active_values_roots,
 };
 pub use vectors::{
