@@ -12,12 +12,51 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 74 / 161 | … → 63 (DRM classes) → 71 (DRM classes batch-2) → 74 (testworks keyword-head `define test`) |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 79 / 161 | … → 74 (testworks keyword-head) → 75 (no-`end` definer) → 76 (multi-method `local`) → 77 (constant slots) → 78 (unknown adjectives + `define domain`) → 79 (with-lock/timing/dynamic-bind macros) |
 | OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
 
 ## Iterations
+
+### 2026-06-16 — Session: parse/lower edge-cases, stdlib macros, multi-file compile
+
+Corpus compile **74 → 79**. Ten commits; in-tree 55/55 both paths and
+smoke-aot 6/6 throughout; AOT build+run verification for the runtime-affecting
+macro work. Worked the gabriel benchmark + threads/io clusters bottom-up:
+diagnose the first error of a failing file, fix the underlying compiler gap (so
+the fix is general, not file-specific), re-measure, commit.
+
+- **Operator function-refs in call position** (`\=(a,b)`, `select … by \=`,
+  `disjoin(\>)`) lowered to an unresolved `DirectCall`; routed `\op(args)` to
+  the inline binop/unop, and added the missing `<=`/`>=` runtime shims.
+- **No-`end` definer shorthand** `define <word> NAME = EXPR;` (e.g.
+  `define benchmark takr = testtakr;`).
+- **Comma-separated `local` methods**: `local method a () … end method a,
+  method b () … end` — the loop consumed `end method` but not the *name echo*
+  (`a`), so the comma mis-parsed. Fixes frpoly (12 diagnostics → 0).
+- **Adjacent string-literal folding** (DRM): `"part one\n" "part two\n"`
+  concatenate. Fixes simple-richards.
+- **`define [sealed] domain GF (types…);`** no-`end` declaration form (parse)
+  + no-op at lowering (sealing hint, no runtime effect).
+- **Unknown leading adjectives**: `define made-inline sealed class …` — an
+  unrecognised leading word is treated as an (ignored) adjective when a known
+  modifier or hard definer keyword follows. cn2 lower errors 12 → 4.
+- **`constant slot`** allocation: instance storage with a getter but no setter
+  (`has_setter = false`). Unblocks the richards/cn2 classes.
+- **stdlib macros (macros-first)**: `with-lock` (locks are no-ops here),
+  `timing` (`values(0,0)`, no wall clock yet), `dynamic-bind` (single binding
+  saves/restores via `block/cleanup` — AOT-verified the restore; multi-binding
+  forward-sets, no restore yet — documented). These names were already in the
+  parser's block-opener set but had no `define macro`, so the raw call reached
+  lowering.
+- **Multi-file `dump-dfm`** (Tier 3 infrastructure): accepts N files, AST-merges
+  them, one expand+lower pass — cross-file refs resolve (a `$tiny-size` in
+  bit-vector-utilities is visible to its bit-vector siblings, which fail alone
+  but compile clean as a unit). N==1 stays byte-identical. Per-file corpus
+  unchanged (79) because per-file errors in other library files still dominate
+  whole-library compiles; pays off once the support files compile. `.lid` file
+  lists give the true library groupings (per-`.lid` counter in `/tmp/cc-lid.sh`).
 
 *(newest first)*
 

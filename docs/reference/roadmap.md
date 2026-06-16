@@ -28,7 +28,7 @@ Effort key: **S** ≈ a day or two · **M** ≈ a week · **L** ≈ 2–4 weeks 
 > (route `\op(args)` to the inline op / shim funcall). Belongs in Tier 1.
 
 Status snapshot (audit): language-core ~65–70%, full platform ~40%. GC correct
-as of 2026-06-15. Corpus compile 74/161.
+as of 2026-06-15. Corpus compile 79/161 (per-file).
 
 ---
 
@@ -59,13 +59,20 @@ defaults, `#key`+`#rest` together, explicit `next-method(args…)`.
 
 ## Tier 3 — Multi-file (single-library) compilation — M/L, unlocks ~10–15
 
-The biggest tractable corpus lever: compile all `.dylan` files of one
-library/suite **together** so intra-library cross-file references resolve
-(`$tiny-size` & friends — the whole `bit-vector-*` / `collections-test-suite`
-cluster). Drive off the existing `.lid`/`.prj` file lists. This is the first
-slice of the real library system and changes the corpus metric from per-file to
-per-library. (Full *cross*-library separate compilation + module encapsulation
-enforcement is Tier 7.)
+**Infrastructure landed (2026-06-16):** `dump-dfm` now accepts multiple files
+and compiles them as one unit (AST-merge → single expand+lower), so
+intra-library cross-file references resolve (`$tiny-size` & friends — the
+bit-vector cluster compiles clean as a unit; the files fail individually). The
+`.lid` `Files:` lists give the true library groupings (`/tmp/cc-lid.sh`).
+
+**Remaining:** the per-library pass count is still low because one buggy file in
+a library (a `*-utilities` / harness file using an unsupported feature) poisons
+the whole-library compile. So the headline metric stays per-file (79) until the
+support files in each library compile cleanly — which is the Tier 4–6 long tail,
+not a Tier 3 problem. Net: the cross-file *plumbing* is done; the unlock now
+depends on grinding the remaining per-file errors *within* each library. (Full
+*cross*-library separate compilation + module encapsulation enforcement is
+Tier 7.)
 
 ## Tier 4 — Condition system depth — M
 
