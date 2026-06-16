@@ -306,3 +306,16 @@ end class;
 
 define class <double-float-vector> (<vector>)
 end class;
+
+// ─── machine-words, bit-set, unicode strings ────────────────────────────────
+// Library class NAME registrations (pinned in class_pins.rs). Operations are
+// call-position (tolerated at compile); these give the class identity so
+// references/`make`/`instance?` resolve.
+define class <machine-word> (<object>)
+end class;
+
+define class <bit-set> (<set>)
+end class;
+
+define class <unicode-string> (<string>)
+end class;
