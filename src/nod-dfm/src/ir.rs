@@ -381,6 +381,9 @@ pub enum PrimOp {
     MulFloat,
     DivFloat,
     NegFloat,
+    /// Coerce a tagged-fixnum integer to a double-float (untag, then sitofp).
+    /// Emitted to bridge mixed int/float arithmetic operands.
+    IntToFloat,
     EqInt,
     NeInt,
     LtInt,
@@ -412,6 +415,7 @@ impl PrimOp {
             PrimOp::MulFloat => "MulFloat",
             PrimOp::DivFloat => "DivFloat",
             PrimOp::NegFloat => "NegFloat",
+            PrimOp::IntToFloat => "IntToFloat",
             PrimOp::EqInt => "EqInt",
             PrimOp::NeInt => "NeInt",
             PrimOp::LtInt => "LtInt",
@@ -444,7 +448,8 @@ impl PrimOp {
             | PrimOp::SubFloat
             | PrimOp::MulFloat
             | PrimOp::DivFloat
-            | PrimOp::NegFloat => TypeEstimate::DoubleFloat,
+            | PrimOp::NegFloat
+            | PrimOp::IntToFloat => TypeEstimate::DoubleFloat,
             PrimOp::EqInt
             | PrimOp::NeInt
             | PrimOp::LtInt

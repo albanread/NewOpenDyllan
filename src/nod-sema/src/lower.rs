@@ -6882,6 +6882,35 @@ impl FunctionBuilder {
                     });
                     return Ok(dst);
                 }
+                // Mixed int/float arithmetic: coerce the integer operand to a
+                // double-float so both feed the float PrimOp (Dylan's numeric
+                // contagion). Only for the arithmetic ops; comparisons handle
+                // mixed types on their own float path.
+                let mut l = l;
+                let mut r = r;
+                let mut lt = lt;
+                let mut rt = rt;
+                if matches!(*op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div) {
+                    if lt.is_integer() && rt.is_float() {
+                        let f = self.fresh_temp(TypeEstimate::DoubleFloat);
+                        self.push(Computation::PrimOp {
+                            dst: f,
+                            op: PrimOp::IntToFloat,
+                            args: vec![l],
+                        });
+                        l = f;
+                        lt = TypeEstimate::DoubleFloat;
+                    } else if rt.is_integer() && lt.is_float() {
+                        let f = self.fresh_temp(TypeEstimate::DoubleFloat);
+                        self.push(Computation::PrimOp {
+                            dst: f,
+                            op: PrimOp::IntToFloat,
+                            args: vec![r],
+                        });
+                        r = f;
+                        rt = TypeEstimate::DoubleFloat;
+                    }
+                }
                 let op = select_binop(*op, lt, rt, *span)?;
                 let dst = self.fresh_temp(op.result_type());
                 self.push(Computation::PrimOp {

@@ -3330,6 +3330,18 @@ impl<'ctx, 'a> Emit<'ctx, 'a> {
                 let v = self.temp_val(args[0]).into_float_value();
                 b.build_float_neg(v, "fneg").map_err(map_err)?.into()
             }
+            // Coerce a tagged fixnum (value << 1) to an f64: arithmetic
+            // shift right by 1 to untag, then signed-int-to-float.
+            PrimOp::IntToFloat => {
+                let v = self.temp_val(args[0]).into_int_value();
+                let one_i64 = self.ctx.i64_type().const_int(1, false);
+                let untag = b
+                    .build_right_shift(v, one_i64, true, "itof.untag")
+                    .map_err(map_err)?;
+                b.build_signed_int_to_float(untag, self.ctx.f64_type(), "itof")
+                    .map_err(map_err)?
+                    .into()
+            }
             // Comparisons run directly on tagged operands — the
             // shift-left-by-1 preserves the signed ordering. The i1
             // result is zext'd to i64 and shifted to land in the
