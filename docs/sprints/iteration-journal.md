@@ -12,7 +12,7 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 81 / 161 | … → 74 (testworks keyword-head) → 75 (no-`end` definer) → 76 (multi-method `local`) → 77 (constant slots) → 78 (unknown adjectives + `define domain`) → 79 (with-lock/timing/dynamic-bind macros) → 81 (profiling macro) |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 83 / 161 | … → 74 (testworks keyword-head) → 75 (no-`end` definer) → 76 (multi-method `local`) → 77 (constant slots) → 78 (unknown adjectives + `define domain`) → 79 (with-lock/timing/dynamic-bind macros) → 81 (profiling macro) → 82 (definer-macro hygiene) → 83 (`subtype?`) |
 | OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
@@ -69,6 +69,15 @@ the fix is general, not file-specific), re-measure, commit.
   iterate forward only; documented).
 - **`profiling (metrics…) body results … end`** stdlib macro (run body, bind
   metrics to 0). Flipped profiling-tests + benchmark-closure (→ 81).
+
+- **Definer-macro hygiene**: a macro whose every rule begins with the literal
+  `define` (`define test`/`suite`/`benchmark`) is now skipped in expression
+  position, so a `#key test` parameter named `test` no longer makes `test(a,b)`
+  match the `define test` macro. Flipped cl-stubs (→ 82).
+- **`subtype?`** type predicate: `nod_subtype_p` runtime shim (CPL walk via
+  `is_subclass`) → `%subtype?` primitive → `define function subtype?` in
+  stdlib/functional.dylan. Resolves in call AND bare-reference position
+  (`rcurry(subtype?, …)`). AOT-verified. Flipped test-condition (→ 83).
 
 Findings logged for later (not quick per-file wins):
 - **Case-insensitive identifiers** (DRM): takl.dylan defines `*L18*` but uses
