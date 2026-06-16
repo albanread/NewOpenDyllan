@@ -1537,6 +1537,32 @@ pub unsafe extern "C-unwind" fn nod_op_gt(a: u64, b: u64) -> u64 {
     if av > bv { imm.true_.raw() } else { imm.false_.raw() }
 }
 
+/// `\<=` — integer less-than-or-equal.
+///
+/// # Safety
+///
+/// No preconditions. Inputs decode as fixnums; non-fixnums treat as 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C-unwind" fn nod_op_le(a: u64, b: u64) -> u64 {
+    let av = Word::from_raw(a).as_fixnum().unwrap_or(0);
+    let bv = Word::from_raw(b).as_fixnum().unwrap_or(0);
+    let imm = crate::literal_pool_immediates();
+    if av <= bv { imm.true_.raw() } else { imm.false_.raw() }
+}
+
+/// `\>=` — integer greater-than-or-equal.
+///
+/// # Safety
+///
+/// No preconditions. Inputs decode as fixnums; non-fixnums treat as 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C-unwind" fn nod_op_ge(a: u64, b: u64) -> u64 {
+    let av = Word::from_raw(a).as_fixnum().unwrap_or(0);
+    let bv = Word::from_raw(b).as_fixnum().unwrap_or(0);
+    let imm = crate::literal_pool_immediates();
+    if av >= bv { imm.true_.raw() } else { imm.false_.raw() }
+}
+
 /// `\==` — IDENTITY equality. Raw-bit compare of the two Words (fixnums
 /// carry their value in the bits, so this matches the inline
 /// `PrimOp::EqInt` semantics; pointer-tagged objects compare by
@@ -1642,6 +1668,8 @@ pub fn ensure_operator_shims_registered() {
             register_rust_function("=", 2, nod_op_eq as *const u8);
             register_rust_function("<", 2, nod_op_lt as *const u8);
             register_rust_function(">", 2, nod_op_gt as *const u8);
+            register_rust_function("<=", 2, nod_op_le as *const u8);
+            register_rust_function(">=", 2, nod_op_ge as *const u8);
             register_rust_function("==", 2, nod_op_eq_eq as *const u8);
             register_rust_function("~=", 2, nod_op_ne as *const u8);
             register_rust_function("~==", 2, nod_op_ne_eq as *const u8);

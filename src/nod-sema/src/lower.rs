@@ -6788,6 +6788,35 @@ impl FunctionBuilder {
                 Ok(last.expect("begin had body"))
             }
             Expr::Call { callee, args, span } => {
+                // An operator function-reference used in CALL position —
+                // `\=(a, b)`, `\>(x, y)`, or the `select … by \=` desugaring.
+                // Lower it identically to the infix form `a op b` (inline
+                // PrimOp), instead of a bare DirectCall against the operator
+                // symbol (no codegen target). Mirrors how `\op` as a VALUE
+                // resolves to the runtime operator shim.
+                if let Expr::Ident(_, name) = callee.as_ref() {
+                    if args.len() == 2
+                        && let Some(op) = binop_from_op_name(name)
+                    {
+                        let bin = Expr::BinOp {
+                            span: *span,
+                            op,
+                            lhs: Box::new(args[0].clone()),
+                            rhs: Box::new(args[1].clone()),
+                        };
+                        return self.lower_expr(&bin, env, ctx);
+                    }
+                    if args.len() == 1
+                        && let Some(op) = unop_from_op_name(name)
+                    {
+                        let un = Expr::UnOp {
+                            span: *span,
+                            op,
+                            operand: Box::new(args[0].clone()),
+                        };
+                        return self.lower_expr(&un, env, ctx);
+                    }
+                }
                 self.lower_call(callee, args, *span, env, ctx)
             }
             Expr::Let { binder, value, .. } => {
@@ -9904,6 +9933,43 @@ fn expr_kind(e: &Expr) -> &'static str {
 }
 
 // ─── BinOp / UnOp resolution ─────────────────────────────────────────────
+
+/// Map an operator name used as a function-reference in CALL position
+/// (`\=(a, b)`, `\>(x, y)`, `select … by \=`) to its `BinOp`, so it lowers
+/// via the inline PrimOp path exactly like the infix form `a op b`. `&`/`|`
+/// are intentionally excluded: as a strict function call they would differ
+/// from the short-circuiting infix forms (and are essentially never used as
+/// call-refs); `:=` is not a call form.
+fn binop_from_op_name(name: &str) -> Option<BinOp> {
+    Some(match name {
+        "+" => BinOp::Add,
+        "-" => BinOp::Sub,
+        "*" => BinOp::Mul,
+        "/" => BinOp::Div,
+        "mod" => BinOp::Mod,
+        "rem" => BinOp::Rem,
+        "^" => BinOp::Pow,
+        "=" => BinOp::Eq,
+        "==" => BinOp::EqEq,
+        "~=" => BinOp::Ne,
+        "~==" => BinOp::NeEq,
+        "<" => BinOp::Lt,
+        ">" => BinOp::Gt,
+        "<=" => BinOp::Le,
+        ">=" => BinOp::Ge,
+        _ => return None,
+    })
+}
+
+/// Unary operator name used as a function-reference in call position
+/// (`\-(x)`, `\~(p)`).
+fn unop_from_op_name(name: &str) -> Option<UnOp> {
+    Some(match name {
+        "-" => UnOp::Neg,
+        "~" => UnOp::Not,
+        _ => return None,
+    })
+}
 
 fn select_binop(
     op: BinOp,
