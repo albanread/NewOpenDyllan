@@ -12,5 +12,23 @@ tools/doccrate/snaps/
 docs/manual/screen.png
 docs/screen.png
 
-# Claude Code personal settings (machine-local, not shared)
+# Claude Code — machine-local / transient state, never shared.
+# (Shared team config like .claude/settings.json, .claude/commands/, or
+#  .claude/agents/ is NOT ignored — force-add it if you add any.)
 .claude/settings.local.json
+.claude/worktrees/
+.claude/projects/
+.claude/todos/
+.claude/shell-snapshots/
+.claude/statsig/
+.claude/history.jsonl
+
+# GC / debug trace artifacts. Point NOD_GC_TRACE at a path UNDER /tmp (or use a
+# .trace extension) so traces never land in the worktree.
+*.trace
+/gc*.trace
+
+# Vendored upstream OpenDylan test corpus — a ~5 MB / ~900-file external snapshot
+# (see opendylan-tests/INVENTORY.md). Kept out of the repo; remove this line if
+# you decide to vendor it.
+/opendylan-tests/
