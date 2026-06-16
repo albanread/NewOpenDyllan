@@ -187,6 +187,21 @@ define macro with-bounds-checks
   { with-bounds-checks ?body:body end } => { begin ?body end }
 end macro;
 
+// ─── with-open-file macro ────────────────────────────────────────────────────
+//
+// `with-open-file (stream = path, #key direction:, if-exists:, …) body end`
+// opens a file stream for the body's dynamic extent and closes it after. We
+// don't yet have a real file-stream port, so this makes a <file-stream> object
+// and runs the body (the stream operations are call-position and tolerated at
+// compile). The options after the binding are accepted and ignored.
+//
+define macro with-open-file
+  { with-open-file (?stream:name = ?path:expression) ?body:body end }
+    => { begin let ?stream = make(<file-stream>, locator: ?path); ?body end }
+  { with-open-file (?stream:name = ?spec:body) ?body:body end }
+    => { begin let ?stream = make(<file-stream>); ?body end }
+end macro;
+
 // ─── with-lock macro ─────────────────────────────────────────────────────────
 //
 // `with-lock (lock) body end` acquires a lock for the dynamic extent of the

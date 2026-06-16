@@ -41,6 +41,11 @@ define class <string-stream> (<stream>)
   slot string-stream-bytes :: <stretchy-vector>, init-keyword: bytes:;
 end class;
 
+// File stream (io). Operations are call-position (tolerated at compile);
+// `with-open-file` makes one. Pinned in class_pins.rs.
+define class <file-stream> (<stream>)
+end class;
+
 // Convenience constructor: a fresh empty string-stream.
 define function make-string-stream () => (s :: <string-stream>)
   make(<string-stream>, bytes: %make-stretchy-vector(64))

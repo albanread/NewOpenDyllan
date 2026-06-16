@@ -156,12 +156,13 @@ pub const CLASS_PINS: &[(&str, u32)] = &[
     ("<machine-word>", 1162),
     ("<bit-set>", 1163),
     ("<unicode-string>", 1164),
+    ("<file-stream>", 1165),
 ];
 
 /// One past the highest pinned id — the base of the per-program USER class
 /// band. User (`define class`) ids allocate from here, so they do not
 /// depend on the count of pinned library classes.
-pub const PIN_CEILING: u32 = 1165;
+pub const PIN_CEILING: u32 = 1166;
 
 /// Look up a library class's pinned id by name.
 pub fn pinned_id(name: &str) -> Option<u32> {
