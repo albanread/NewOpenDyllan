@@ -212,6 +212,24 @@ define macro timing
     => { begin ?body; values(0, 0) end }
 end macro;
 
+// ─── profiling macro ─────────────────────────────────────────────────────────
+//
+// `profiling (metric, …) body results result-body end` runs the body under a
+// profiler, binds each named metric (cpu-time-seconds, allocation, …) to the
+// measured value, then runs result-body with those bindings in scope. We have
+// no profiler, so run the body and bind every metric to 0.
+//
+define macro profiling
+  { profiling ( { ?metric:name } , ... ) ?body:body results ?results:body end }
+    => { begin
+           ?body;
+           { let ?metric = 0; } ...
+           ?results
+         end }
+  { profiling ( { ?metric:name } , ... ) ?body:body end }
+    => { begin ?body end }
+end macro;
+
 // ─── dynamic-bind macro ──────────────────────────────────────────────────────
 //
 // `dynamic-bind (place = val, …) body end` rebinds each assignable place for
