@@ -216,6 +216,30 @@ or a standing design trade-off are kept here.
   work to honour it.
 * **Status**: open (parses; semantics forward-only).
 
+## Multi-fragment argument in a comma-separated call-macro pattern doesn't match
+
+* **Symptom**: a call-shaped macro rule `{ m(?a:expression, ?b:expression) }`
+  matches `m(x, 3)` but NOT `m(x, f(y))` or `m(x, a + b)` — "call to macro `m`
+  matched none of its N rules". A single-argument call-macro (`assert(f(x))`)
+  works; only the *comma-separated* multi-argument case fails when a non-first
+  slot is more than one fragment (an `ident(args)` call is two fragments, a
+  binop is three). Wrapping the arg in parens (`m(x, (f(y)))`) works around it.
+* **Cause**: the macro engine's argument matcher for a parenthesised
+  comma-separated call pattern binds each comma slot to a single fragment
+  (token or balanced group), rather than greedily matching all fragments up to
+  the next top-level comma.
+* **Impact**: the condition-testing testworks helpers (`check-condition`,
+  `assert-signals`, `check-no-errors`, `assert-no-errors`, `check-no-condition`)
+  cannot be the faithful `block … exception …` macros they should be (the tested
+  form is a call), so they are shipped as plain **functions** that evaluate the
+  form eagerly — the files COMPILE but the helpers don't actually catch a
+  signal. `with-pretty-print-to-string`, `collecting(as ?type)`, and other
+  multi-arg call macros hit the same wall.
+* **Planned fix**: make the comma-slot matcher greedy (match fragments up to the
+  next depth-0 comma / closing paren), in `src/nod-macro/src/lib.rs`.
+* **Scope**: medium (macro engine).
+* **Status**: open (functions ship as eager stubs meanwhile).
+
 ## An unhandled signalled condition panics the JIT eval engine
 
 * **Symptom**: when front-end/expansion code signals a `<condition>` that no

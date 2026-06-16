@@ -230,6 +230,7 @@ define macro profiling
     => { begin ?body end }
 end macro;
 
+
 // ─── dynamic-bind macro ──────────────────────────────────────────────────────
 //
 // `dynamic-bind (place = val, …) body end` rebinds each assignable place for
