@@ -334,6 +334,11 @@ end macro;
 define macro benchmark
   { define benchmark ?name:name () ?body:body end }
     => { define function ?name () ?body end }
+  // No-`end` assignment shorthand: `define benchmark NAME = EXPR;` names a
+  // benchmark whose body is EXPR (gabriel suite: `define benchmark takr =
+  // testtakr;`). Becomes a nullary function that evaluates EXPR.
+  { define benchmark ?name:name = ?val:expression }
+    => { define function ?name () ?val end }
 end macro;
 
 // ─── benchmark-repeat — minimal testworks-compat timing wrapper ───────────────

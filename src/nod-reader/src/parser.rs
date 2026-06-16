@@ -3076,6 +3076,37 @@ impl<'a> Parser<'a> {
                 self.bump();
             }
         }
+        // No-`end` assignment shorthand: `define <word> NAME = EXPR ;`
+        // (e.g. `define benchmark takr = testtakr;`). There is no `end` for
+        // this form — capture `= EXPR` as the body fragments (a macro for the
+        // keyword rewrites it) and finish at the `;`/`define`/EOF terminator.
+        if matches!(self.peek_kind(), TokenKind::Equal) {
+            let body_start = self.pos; // include the `=`
+            while !self.at_end()
+                && !matches!(
+                    self.peek_kind(),
+                    TokenKind::Semicolon | TokenKind::KwDefine
+                )
+            {
+                self.bump();
+            }
+            let body_end = self.pos;
+            let body_tokens = &self.tokens[body_start..body_end];
+            let body_fragments = crate::fragments::build_fragments(body_tokens)
+                .unwrap_or_else(|_| body_tokens.iter().copied().map(Fragment::Token).collect());
+            let end_span = self
+                .tokens
+                .get(body_end.saturating_sub(1))
+                .map(|t| t.span)
+                .unwrap_or(define_tok.span);
+            return Ok(Item::DefineOther {
+                span: join(define_tok.span, end_span),
+                modifiers,
+                keyword,
+                name,
+                body_fragments,
+            });
+        }
         // Capture body up to matching `end [keyword] [name]`.
         let body_start = self.pos;
         self.skip_body_to_matching_end(&keyword);
