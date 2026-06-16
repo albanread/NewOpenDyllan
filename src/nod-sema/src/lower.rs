@@ -8282,6 +8282,71 @@ impl FunctionBuilder {
                 message: "make: missing class argument".to_string(),
             });
         }
+        // Dynamic class operand: a class held in a binding (`let`/param) or any
+        // non-class-literal expression. We can't resolve a static class id, so
+        // lower the operand to a (tagged) class-value Word, strip its pointer
+        // tag, and route through the generic `%make` path (the `<table>` /
+        // `<bit-vector>` special cases below need a static id and are only
+        // reachable via a class-name literal).
+        let dynamic_class: Option<TempId> = match &args[0] {
+            Expr::Ident(_, name)
+                if ctx.user_classes.get(name).is_none()
+                    && resolve_class_id_by_name(name).is_none()
+                    && env.contains_key(name) =>
+            {
+                Some(self.lower_expr(&args[0], env, ctx)?)
+            }
+            e if !matches!(e, Expr::Ident(..)) => Some(self.lower_expr(&args[0], env, ctx)?),
+            _ => None,
+        };
+        if let Some(class_word) = dynamic_class {
+            let stripped = self.fresh_temp(TypeEstimate::Top);
+            self.push(Computation::PrimOp {
+                dst: stripped,
+                op: PrimOp::StripTag,
+                args: vec![class_word],
+            });
+            let mut make_args = vec![stripped];
+            for a in &args[1..] {
+                let (kw_name, value_expr) = match a {
+                    Expr::Call { callee, args: kwargs, .. }
+                        if matches!(callee.as_ref(), Expr::Ident(_, n) if n == "%kw-arg")
+                            && kwargs.len() == 2 =>
+                    {
+                        let raw_name = match &kwargs[0] {
+                            Expr::Symbol(_, s) => s.trim_end_matches(':').to_string(),
+                            _ => {
+                                return Err(LoweringError::Unsupported {
+                                    span: a.span(),
+                                    message: "make: kw-arg name must be a keyword".to_string(),
+                                });
+                            }
+                        };
+                        (raw_name, &kwargs[1])
+                    }
+                    _ => {
+                        return Err(LoweringError::Unsupported {
+                            span: a.span(),
+                            message: "make: arguments after the class must be `kw: value` pairs"
+                                .to_string(),
+                        });
+                    }
+                };
+                let name_temp = self.emit_symbol_literal(&kw_name);
+                let value_temp = self.lower_expr(value_expr, env, ctx)?;
+                make_args.push(name_temp);
+                make_args.push(value_temp);
+            }
+            let dst = self.fresh_temp(TypeEstimate::Top);
+            self.push(Computation::DirectCall {
+                dst,
+                callee: "%make".to_string(),
+                args: make_args,
+                safepoint_roots: Vec::new(),
+                is_no_alloc: false,
+            });
+            return Ok(dst);
+        }
         // First arg: class. Expect an identifier resolving to a
         // registered class.
         let class_id = match &args[0] {
@@ -8744,25 +8809,52 @@ impl FunctionBuilder {
                             id: id.0,
                             name: name.clone(),
                         },
+                        None if env.contains_key(name) => {
+                            // Dynamic: `name` is a binding holding a class
+                            // value. Lower it and call `nod_instance_p`, which
+                            // reads the class id from the tagged class Word.
+                            // (Previously this fell to `Unsupported`, which
+                            // codegen'd to a silent constant `#f`.)
+                            return self.lower_dynamic_instance_check(v, class, env, ctx);
+                        }
                         None => ClassCheck::Unsupported {
                             name: static_class_name(name),
                         },
                     }
                 }
             },
-            _ => {
-                return Err(LoweringError::Unsupported {
-                    span,
-                    message: "second argument to `instance?` must be a class name literal"
-                        .to_string(),
-                });
-            }
+            // Non-identifier class operand (e.g. a call returning a class):
+            // route through the dynamic runtime check.
+            _ => return self.lower_dynamic_instance_check(v, class, env, ctx),
         };
         let dst = self.fresh_temp(TypeEstimate::Boolean);
         self.push(Computation::TypeCheck {
             dst,
             value: v,
             class: check,
+        });
+        Ok(dst)
+    }
+
+    /// `instance?(value, CLASS)` where CLASS is a runtime value (a binding or
+    /// expression), not a class-name literal. Lower the class operand to a
+    /// (tagged) class-value Word and call `nod_instance_p`, which strips the
+    /// tag and reads the class id. `value` is already lowered to `v`.
+    fn lower_dynamic_instance_check(
+        &mut self,
+        v: TempId,
+        class: &Expr,
+        env: &mut LocalEnv,
+        ctx: &LowerCtx,
+    ) -> Result<TempId, LoweringError> {
+        let class_word = self.lower_expr(class, env, ctx)?;
+        let dst = self.fresh_temp(TypeEstimate::Boolean);
+        self.push(Computation::DirectCall {
+            dst,
+            callee: "nod_instance_p".to_string(),
+            args: vec![v, class_word],
+            safepoint_roots: Vec::new(),
+            is_no_alloc: false,
         });
         Ok(dst)
     }

@@ -384,6 +384,10 @@ pub enum PrimOp {
     /// Coerce a tagged-fixnum integer to a double-float (untag, then sitofp).
     /// Emitted to bridge mixed int/float arithmetic operands.
     IntToFloat,
+    /// Clear the pointer tag (bit 0) of a Word — turns a tagged class-value
+    /// (`metadata_ptr | 1`) into the raw `metadata_ptr` that `%make`/`nod_make`
+    /// expects. Used to route a class held in a binding through `make`.
+    StripTag,
     EqInt,
     NeInt,
     LtInt,
@@ -416,6 +420,7 @@ impl PrimOp {
             PrimOp::DivFloat => "DivFloat",
             PrimOp::NegFloat => "NegFloat",
             PrimOp::IntToFloat => "IntToFloat",
+            PrimOp::StripTag => "StripTag",
             PrimOp::EqInt => "EqInt",
             PrimOp::NeInt => "NeInt",
             PrimOp::LtInt => "LtInt",
@@ -450,6 +455,7 @@ impl PrimOp {
             | PrimOp::DivFloat
             | PrimOp::NegFloat
             | PrimOp::IntToFloat => TypeEstimate::DoubleFloat,
+            PrimOp::StripTag => TypeEstimate::Top,
             PrimOp::EqInt
             | PrimOp::NeInt
             | PrimOp::LtInt

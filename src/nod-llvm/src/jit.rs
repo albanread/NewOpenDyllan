@@ -34,7 +34,7 @@ use crate::codegen::{
     NOD_STRETCHY_VECTOR_PUSH_SYMBOL, NOD_STRETCHY_VECTOR_SIZE_SYMBOL,
     // Sprint 22 — <table> + hashing.
     NOD_MAKE_TABLE_SYMBOL, NOD_OBJECT_EQUAL_P_SYMBOL, NOD_OBJECT_HASH_SYMBOL, NOD_OP_POW_SYMBOL,
-    NOD_SUBTYPE_P_SYMBOL,
+    NOD_SUBTYPE_P_SYMBOL, NOD_INSTANCE_P_SYMBOL,
     NOD_TABLE_ELEMENT_OR_DEFAULT_SYMBOL, NOD_TABLE_ELEMENT_SETTER_SYMBOL, NOD_TABLE_ELEMENT_SYMBOL,
     NOD_TABLE_KEYS_SYMBOL, NOD_TABLE_REMOVE_KEY_SYMBOL, NOD_TABLE_SIZE_SYMBOL,
     NOD_TABLE_VALUES_SYMBOL,
@@ -1467,6 +1467,7 @@ fn standard_extern_addresses() -> Vec<(&'static str, *mut std::ffi::c_void)> {
         (NOD_OBJECT_EQUAL_P_SYMBOL, nod_runtime::nod_object_equal_p as *const () as *mut std::ffi::c_void),
         (NOD_OP_POW_SYMBOL, nod_runtime::nod_op_pow as *const () as *mut std::ffi::c_void),
         (NOD_SUBTYPE_P_SYMBOL, nod_runtime::nod_subtype_p as *const () as *mut std::ffi::c_void),
+        (NOD_INSTANCE_P_SYMBOL, nod_runtime::nod_instance_p as *const () as *mut std::ffi::c_void),
         // Sprint 42a — <byte-string> primitives.
         (NOD_BYTE_STRING_ALLOCATE_SYMBOL, nod_runtime::nod_byte_string_allocate as *const () as *mut std::ffi::c_void),
         (NOD_BYTE_STRING_SIZE_SYMBOL, nod_runtime::nod_byte_string_size as *const () as *mut std::ffi::c_void),

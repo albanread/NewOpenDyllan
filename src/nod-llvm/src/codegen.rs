@@ -423,6 +423,7 @@ pub const NOD_OBJECT_HASH_SYMBOL: &str = "nod_object_hash";
 pub const NOD_OBJECT_EQUAL_P_SYMBOL: &str = "nod_object_equal_p";
 pub const NOD_OP_POW_SYMBOL: &str = "nod_op_pow";
 pub const NOD_SUBTYPE_P_SYMBOL: &str = "nod_subtype_p";
+pub const NOD_INSTANCE_P_SYMBOL: &str = "nod_instance_p";
 
 // Sprint 42a — <byte-string> primitives. Five-op minimum surface; all
 // user-visible byte-string methods (`size`, `element`, `concatenate`,
@@ -502,6 +503,7 @@ const SPRINT_20B_PRIMITIVES: &[(&str, &str, usize)] = &[
     ("nod_object_equal_p", NOD_OBJECT_EQUAL_P_SYMBOL, 2),
     ("nod_op_pow", NOD_OP_POW_SYMBOL, 2),
     ("nod_subtype_p", NOD_SUBTYPE_P_SYMBOL, 2),
+    ("nod_instance_p", NOD_INSTANCE_P_SYMBOL, 2),
     // Sprint 42a — <byte-string> primitives.
     ("nod_byte_string_allocate", NOD_BYTE_STRING_ALLOCATE_SYMBOL, 1),
     ("nod_byte_string_size", NOD_BYTE_STRING_SIZE_SYMBOL, 1),
@@ -3341,6 +3343,13 @@ impl<'ctx, 'a> Emit<'ctx, 'a> {
                 b.build_signed_int_to_float(untag, self.ctx.f64_type(), "itof")
                     .map_err(map_err)?
                     .into()
+            }
+            // Clear bit 0 (the pointer tag) to recover a raw metadata pointer
+            // from a tagged class-value Word.
+            PrimOp::StripTag => {
+                let v = self.temp_val(args[0]).into_int_value();
+                let mask = self.ctx.i64_type().const_int(!1u64, false);
+                b.build_and(v, mask, "striptag").map_err(map_err)?.into()
             }
             // Comparisons run directly on tagged operands — the
             // shift-left-by-1 preserves the signed ordering. The i1

@@ -853,6 +853,7 @@ fn parse_primop(lno: usize, name: &str) -> Result<PrimOp, String> {
         "DivFloat" => PrimOp::DivFloat,
         "NegFloat" => PrimOp::NegFloat,
         "IntToFloat" => PrimOp::IntToFloat,
+        "StripTag" => PrimOp::StripTag,
         "EqInt" => PrimOp::EqInt,
         "NeInt" => PrimOp::NeInt,
         "LtInt" => PrimOp::LtInt,
