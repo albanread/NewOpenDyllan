@@ -12,7 +12,7 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 101 / 161 | … → 91 (float constants) → 92 (testworks 2nd-tier) → 93 (mixed int/float) → 95 (make/instance? non-literal class) → 98 (locators library) → 101 (`<machine-word>`/`<bit-set>`/`<unicode-string>`) |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 103 / 161 | … → 93 (mixed int/float) → 95 (make/instance? non-literal class) → 98 (locators library) → 101 (`<machine-word>`/`<bit-set>`/`<unicode-string>`) → 103 (`#rest` in multiple-value `let`) |
 | OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
@@ -51,9 +51,19 @@ classes went in cleanly:
 Each was a one-line-per-class pin append; in-tree 55/55, smoke-aot 6/6, dump
 tests all green with zero rebless.
 
-Remaining (next): `#rest`-in-`let` multiple-value-bind (control, regressions —
-needs a rest-collect-into-SOV helper); the bit-vector cross-file `$tiny-size`
-cluster (multifile metric); frpoly mutually-recursive local-method lift.
+**`#rest` in multiple-value `let`** (+2: control, regressions). `let (a, b,
+#rest r) = form` binds the explicit binders from the multiple values, then
+collects the rest into a fresh SOV via `nod_collect_rest_values` (GC-safe:
+`VALUES_BUF` is already a root, primary protected with a `RootGuard`). Wired into
+all four statement-lowering paths. AOT build+run verified. (Surfaced a separate
+pre-existing gap: `element()` on `<simple-object-vector>` — not a corpus
+blocker since the metric is compile.)
+
+Remaining (next): `define table` definer + `{ k => v }` table literal (dderiv,
+macros-tests); the bit-vector cross-file `$tiny-size` cluster (multifile
+metric); frpoly mutually-recursive local-method lift (block-thunk key);
+`element`-on-SOV; the macro-engine multi-fragment call-arg matcher (stak's
+`dynamic-bind`, etc.).
 
 ### 2026-06-16 — Systemic-blocker push (workflow-driven), corpus 83 → 93
 
