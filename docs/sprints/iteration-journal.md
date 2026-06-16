@@ -12,7 +12,7 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 103 / 161 | … → 93 (mixed int/float) → 95 (make/instance? non-literal class) → 98 (locators library) → 101 (`<machine-word>`/`<bit-set>`/`<unicode-string>`) → 103 (`#rest` in multiple-value `let`) |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 106 / 161 | … → 98 (locators) → 101 (`<machine-word>`/`<bit-set>`/`<unicode-string>`) → 103 (`#rest` in multiple-value `let`) → 104 (`join-thread`) → 106 (`<file-stream>` + `with-open-file`) |
 | OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
@@ -59,11 +59,29 @@ all four statement-lowering paths. AOT build+run verified. (Surfaced a separate
 pre-existing gap: `element()` on `<simple-object-vector>` — not a corpus
 blocker since the metric is compile.)
 
-Remaining (next): `define table` definer + `{ k => v }` table literal (dderiv,
-macros-tests); the bit-vector cross-file `$tiny-size` cluster (multifile
-metric); frpoly mutually-recursive local-method lift (block-thunk key);
-`element`-on-SOV; the macro-engine multi-fragment call-arg matcher (stak's
-`dynamic-bind`, etc.).
+**More cash-in (class-id pins keep unblocking library classes):**
+- `join-thread` (single-threaded stub, first-class fn) → +1 (threads).
+- `<file-stream>` (⊂ `<stream>`, pinned) + a `with-open-file` macro (makes a
+  file-stream, runs body; options accepted+ignored) → +2 (cn2, write-100mb).
+
+Corpus 103 → 106.
+
+Finding: empty-body body-macro calls (`with-open-file (s = path) end`, no body)
+are NOT recognised by the parser, and the case is genuinely AMBIGUOUS — a name
+can be both a call-macro and a block-opener (e.g. a fixture redefines `when` as
+`{ when(?c, ?b) }`), so `when(x, y) end` could be a call followed by an
+enclosing `end`. Relaxing the recogniser for `is_block_opener_kw` names still
+broke that fixture; reverted. Empty-body body-macros need a different
+disambiguator (e.g. only when the head looks like a `name = expr` binding).
+file-system stays blocked (it also needs `$os-name`, `<byte-character>`,
+`<file-exists-error>`, …).
+
+Remaining single-error files all need deeper work: `define table` definer +
+`{ k => v }` table literal (dderiv, macros-tests); case-insensitive identifiers
+(takl: `*L18*` vs `*l18*`); the macro-engine multi-fragment call-arg matcher
+(number-test-utilities/pprint user macros, stak's `dynamic-bind`); cross-file
+`*uppercase-alphabet*` (test-character); transitive closure capture
+(notifications); `element`-on-SOV (runtime, not a corpus blocker).
 
 ### 2026-06-16 — Systemic-blocker push (workflow-driven), corpus 83 → 93
 
