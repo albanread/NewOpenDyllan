@@ -269,3 +269,11 @@ end function;
 define function subtype? (type1, type2) => (subtype? :: <boolean>)
   %subtype?(type1, type2)
 end function;
+
+// `join-thread(thread, #rest args)` — block until `thread` finishes and
+// return its result values. We are single-threaded (threads run to
+// completion eagerly), so this is a stub that returns the thread; it must
+// be a real first-class function because the corpus passes it to `apply`.
+define function join-thread (thread, #rest args) => (thread)
+  thread
+end function;
