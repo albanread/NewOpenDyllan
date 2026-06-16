@@ -180,6 +180,27 @@ or a standing design trade-off are kept here.
   `src/nod-macro/src/lib.rs`).
 * **Status**: open.
 
+## Multi-binding `dynamic-bind` does not restore prior values
+
+* **Symptom**: `dynamic-bind (a = 1, b = 2) … end` (two or more bindings)
+  forward-sets each place and runs the body, but does **not** restore the prior
+  values on exit. The single-binding form `dynamic-bind (a = 1) … end` *does*
+  restore (verified by AOT build+run: a value bound inside reads back as its
+  prior value after the block).
+* **Cause**: the stdlib macro (`stdlib/macros.dylan`) implements the
+  single-binding case with `block ()/cleanup` save-and-restore, but the
+  multi-binding case expands via the `{ ?place := ?val; } ...` sequence splice,
+  which can set every place but cannot generate a per-place saved temporary or a
+  reverse-order restore (the macro engine has no rest/recursion pattern — only
+  `expression`/`name`/`body`/`variable`/`parameter-list` kinds and `{ } ...`
+  sequences).
+* **Workaround**: nest single-binding `dynamic-bind`s, which compose correctly
+  and each restore.
+* **Planned fix**: a macro-engine rest/recursion pattern, or a runtime
+  dynamic-binding stack the macro pushes/pops.
+* **Scope**: small–medium (`stdlib/macros.dylan` once the engine supports it).
+* **Status**: open (single-binding works).
+
 ## An unhandled signalled condition panics the JIT eval engine
 
 * **Symptom**: when front-end/expansion code signals a `<condition>` that no

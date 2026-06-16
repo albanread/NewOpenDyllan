@@ -187,6 +187,63 @@ define macro with-bounds-checks
   { with-bounds-checks ?body:body end } => { begin ?body end }
 end macro;
 
+// ─── with-lock macro ─────────────────────────────────────────────────────────
+//
+// `with-lock (lock) body end` acquires a lock for the dynamic extent of the
+// body. We are single-threaded, so locks are no-ops — evaluate the lock
+// expression (for any side effects) and run the body. The optional `failure`
+// clause (taken only when acquisition times out) is unreachable for us.
+//
+define macro with-lock
+  { with-lock (?lock:expression) ?body:body end }
+    => { begin ?lock; ?body end }
+  { with-lock (?lock:expression) ?body:body failure ?fail:body end }
+    => { begin ?lock; ?body end }
+end macro;
+
+// ─── timing macro ────────────────────────────────────────────────────────────
+//
+// `timing () body end` runs the body and returns the elapsed time as two
+// integer values (seconds, microseconds). We don't yet have a wall clock
+// wired in, so report zero elapsed.
+//
+define macro timing
+  { timing () ?body:body end }
+    => { begin ?body; values(0, 0) end }
+end macro;
+
+// ─── dynamic-bind macro ──────────────────────────────────────────────────────
+//
+// `dynamic-bind (place = val, …) body end` rebinds each assignable place for
+// the dynamic extent of the body, restoring the prior value on exit (normal
+// or non-local). Peel one binding per rule and recurse on the rest; each
+// level saves/restores in its own block scope.
+//
+//   dynamic-bind (*tv* = v) body end
+//   ⟹  let old = *tv*;
+//       block () *tv* := v; body cleanup *tv* := old end
+//
+// Single-binding form restores the prior value on exit (normal or non-local)
+// via block/cleanup. The multi-binding form forward-sets each place (no
+// per-place restore yet — see docs/reference/known-limitations.md).
+define macro dynamic-bind
+  { dynamic-bind (?place:expression = ?val:expression) ?body:body end }
+    => { begin
+           let dynamic-bind-saved = ?place;
+           block ()
+             ?place := ?val;
+             ?body
+           cleanup
+             ?place := dynamic-bind-saved
+           end
+         end }
+  { dynamic-bind ( { ?place:expression = ?val:expression } , ... ) ?body:body end }
+    => { begin
+           { ?place := ?val; } ...
+           ?body
+         end }
+end macro;
+
 // ─── inc! / dec! macros ──────────────────────────────────────────────────────
 //
 // In-place increment / decrement of a place expression, sugar over the
