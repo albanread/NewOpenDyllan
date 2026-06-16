@@ -100,6 +100,12 @@ static STDLIB_MACROS: OnceLock<MacroTable> = OnceLock::new();
 /// stdlib JIT engine never sees these constants as functions.
 static STDLIB_CONSTANTS: OnceLock<HashMap<String, i128>> = OnceLock::new();
 
+/// Float sibling of [`STDLIB_CONSTANTS`]: stdlib `define constant N = <float>`
+/// (e.g. `$single-pi`, `$double-e`) curated into a process-global map so user
+/// code reads them as `ConstValue::Float` literals rather than unreachable
+/// 0-arg stdlib functions.
+static STDLIB_FLOAT_CONSTANTS: OnceLock<HashMap<String, f64>> = OnceLock::new();
+
 /// Ordered list of stdlib source files the loader processes. Each entry
 /// lives under `stdlib/`. The first file owns
 /// the macros (so `for-each` etc. remain reachable via
@@ -227,6 +233,11 @@ pub(crate) fn stdlib_macros() -> &'static MacroTable {
 /// `lower_module` which call `ensure_loaded` already.
 pub fn lookup_constant(name: &str) -> Option<i128> {
     STDLIB_CONSTANTS.get()?.get(name).copied()
+}
+
+/// Float sibling of [`lookup_constant`] for stdlib `define constant N = <float>`.
+pub fn lookup_float_constant(name: &str) -> Option<f64> {
+    STDLIB_FLOAT_CONSTANTS.get()?.get(name).copied()
 }
 
 /// Sprint 29: read-only access to the constants map (for tests
@@ -400,6 +411,7 @@ fn load_stdlib() -> Result<StdlibArtefacts, LoadError> {
     // engine, and wasteful. User-code lowering will see these names
     // through `lookup_constant`.
     let mut constants_map: HashMap<String, i128> = HashMap::new();
+    let mut float_constants_map: HashMap<String, f64> = HashMap::new();
     module.items.retain(|it| match it {
         Item::DefineConstant {
             name,
@@ -412,9 +424,18 @@ fn load_stdlib() -> Result<StdlibArtefacts, LoadError> {
             constants_map.insert(name.clone(), *n);
             false
         }
+        Item::DefineConstant {
+            name,
+            value: Expr::Float(_, f),
+            ..
+        } => {
+            float_constants_map.insert(name.clone(), *f);
+            false
+        }
         _ => true,
     });
     let _ = STDLIB_CONSTANTS.set(constants_map);
+    let _ = STDLIB_FLOAT_CONSTANTS.set(float_constants_map);
 
     // Rewrite every `define function` in stdlib into a `define method
     // f (p1 :: <object>, p2 :: <object>, …)` so user code's

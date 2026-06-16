@@ -6664,6 +6664,16 @@ impl FunctionBuilder {
                     });
                     return Ok(t);
                 }
+                // stdlib-curated float constant (`$single-pi`, `$double-e`, …):
+                // resolve to a literal float, same as the integer path above.
+                if let Some(v) = crate::stdlib::lookup_float_constant(name) {
+                    let t = self.fresh_temp(TypeEstimate::DoubleFloat);
+                    self.push(Computation::Const {
+                        dst: t,
+                        value: ConstValue::Float(v),
+                    });
+                    return Ok(t);
+                }
                 // Sprint 12: a `<foo>`-shaped ident may refer to a
                 // registered class. Lower as a constant pointer to
                 // the class metadata (i.e. a tagged Word).

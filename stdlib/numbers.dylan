@@ -325,3 +325,11 @@ define function integer-length (n) => (len)
   end;
   len
 end function;
+
+// Transcendental constants (common-dylan `transcendentals` module). Plain
+// float literals; single/double distinction is not yet tracked in the type
+// lattice, so both precisions share the value.
+define constant $single-pi :: <float> = 3.141592653589793;
+define constant $double-pi :: <float> = 3.141592653589793;
+define constant $single-e  :: <float> = 2.718281828459045;
+define constant $double-e  :: <float> = 2.718281828459045;
