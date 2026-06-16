@@ -5664,8 +5664,57 @@ fn lift_statement(
             }
             scope.in_scope = saved;
         }
-        Statement::For { .. } => {
-            // For statements aren't lowered in Sprint 18; leave alone.
+        Statement::For { clauses, body, finally_, .. } => {
+            // Lift method literals embedded in clause expressions. These are
+            // evaluated in the ENCLOSING scope (before the loop variables
+            // bind), so lift them before extending in_scope.
+            for clause in clauses.iter_mut() {
+                match clause {
+                    ForClause::Numeric(n) => {
+                        lift_expr(&mut n.from, scope, st);
+                        if let Some(e) = &mut n.to { lift_expr(e, scope, st); }
+                        if let Some(e) = &mut n.below { lift_expr(e, scope, st); }
+                        if let Some(e) = &mut n.above { lift_expr(e, scope, st); }
+                        if let Some(e) = &mut n.by { lift_expr(e, scope, st); }
+                    }
+                    ForClause::From(ff) => {
+                        lift_expr(&mut ff.from, scope, st);
+                        if let Some(e) = &mut ff.by { lift_expr(e, scope, st); }
+                    }
+                    ForClause::Step(s) => {
+                        lift_expr(&mut s.init, scope, st);
+                        if let Some(e) = &mut s.next { lift_expr(e, scope, st); }
+                    }
+                    ForClause::While { cond, .. } | ForClause::Until { cond, .. } => {
+                        lift_expr(cond, scope, st);
+                    }
+                    ForClause::In { coll, .. } | ForClause::Keyed { coll, .. } => {
+                        lift_expr(coll, scope, st);
+                    }
+                }
+            }
+            // Bind the loop variables, then lift the body + finally clause.
+            let saved = scope.in_scope.clone();
+            for clause in clauses.iter() {
+                match clause {
+                    ForClause::Numeric(n) => { scope.in_scope.insert(n.var.clone()); }
+                    ForClause::From(ff) => { scope.in_scope.insert(ff.var.clone()); }
+                    ForClause::Step(s) => { scope.in_scope.insert(s.var.clone()); }
+                    ForClause::In { var, .. } => { scope.in_scope.insert(var.clone()); }
+                    ForClause::Keyed { var, key, .. } => {
+                        scope.in_scope.insert(var.clone());
+                        scope.in_scope.insert(key.clone());
+                    }
+                    ForClause::While { .. } | ForClause::Until { .. } => {}
+                }
+            }
+            for sub in body.iter_mut() {
+                lift_statement(sub, scope, st);
+            }
+            for sub in finally_.iter_mut() {
+                lift_statement(sub, scope, st);
+            }
+            scope.in_scope = saved;
         }
         Statement::Block {
             exit_var,
@@ -5989,7 +6038,65 @@ fn check_free_vars_in_stmt(
             }
             *inner_scope = saved;
         }
-        Statement::For { .. } => {}
+        Statement::For { clauses, body, finally_, .. } => {
+            // Init / bound / collection expressions evaluate in the enclosing
+            // scope (before the loop variables bind).
+            for clause in clauses.iter() {
+                match clause {
+                    ForClause::Numeric(n) => {
+                        check_free_vars(&n.from, inner_scope, outer_scope, top, free);
+                        if let Some(e) = &n.to { check_free_vars(e, inner_scope, outer_scope, top, free); }
+                        if let Some(e) = &n.below { check_free_vars(e, inner_scope, outer_scope, top, free); }
+                        if let Some(e) = &n.above { check_free_vars(e, inner_scope, outer_scope, top, free); }
+                        if let Some(e) = &n.by { check_free_vars(e, inner_scope, outer_scope, top, free); }
+                    }
+                    ForClause::From(ff) => {
+                        check_free_vars(&ff.from, inner_scope, outer_scope, top, free);
+                        if let Some(e) = &ff.by { check_free_vars(e, inner_scope, outer_scope, top, free); }
+                    }
+                    ForClause::Step(s) => {
+                        check_free_vars(&s.init, inner_scope, outer_scope, top, free);
+                    }
+                    ForClause::In { coll, .. } | ForClause::Keyed { coll, .. } => {
+                        check_free_vars(coll, inner_scope, outer_scope, top, free);
+                    }
+                    ForClause::While { .. } | ForClause::Until { .. } => {}
+                }
+            }
+            let saved = inner_scope.clone();
+            for clause in clauses.iter() {
+                match clause {
+                    ForClause::Numeric(n) => { inner_scope.insert(n.var.clone()); }
+                    ForClause::From(ff) => { inner_scope.insert(ff.var.clone()); }
+                    ForClause::Step(s) => { inner_scope.insert(s.var.clone()); }
+                    ForClause::In { var, .. } => { inner_scope.insert(var.clone()); }
+                    ForClause::Keyed { var, key, .. } => {
+                        inner_scope.insert(var.clone());
+                        inner_scope.insert(key.clone());
+                    }
+                    ForClause::While { .. } | ForClause::Until { .. } => {}
+                }
+            }
+            // Step `next` and while/until conditions reference the loop vars.
+            for clause in clauses.iter() {
+                match clause {
+                    ForClause::Step(s) => {
+                        if let Some(e) = &s.next { check_free_vars(e, inner_scope, outer_scope, top, free); }
+                    }
+                    ForClause::While { cond, .. } | ForClause::Until { cond, .. } => {
+                        check_free_vars(cond, inner_scope, outer_scope, top, free);
+                    }
+                    _ => {}
+                }
+            }
+            for sub in body {
+                check_free_vars_in_stmt(sub, inner_scope, outer_scope, top, free);
+            }
+            for sub in finally_ {
+                check_free_vars_in_stmt(sub, inner_scope, outer_scope, top, free);
+            }
+            *inner_scope = saved;
+        }
         Statement::Block {
             exit_var,
             body,
