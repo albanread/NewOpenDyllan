@@ -12,12 +12,56 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 83 / 161 | … → 74 (testworks keyword-head) → 75 (no-`end` definer) → 76 (multi-method `local`) → 77 (constant slots) → 78 (unknown adjectives + `define domain`) → 79 (with-lock/timing/dynamic-bind macros) → 81 (profiling macro) → 82 (definer-macro hygiene) → 83 (`subtype?`) |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 93 / 161 | … → 79 (macros) → 81 (profiling) → 82 (definer-macro hygiene) → 83 (`subtype?`) → 87 (interface-specification-suite) → 88 (for-stmt closure lift) → 91 (float constants) → 92 (testworks 2nd-tier helpers) → 93 (mixed int/float coercion) |
 | OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
 
 ## Iterations
+
+### 2026-06-16 — Systemic-blocker push (workflow-driven), corpus 83 → 93
+
+Switched from per-file grinding to **systemic** levers. Ran a 17-agent
+cascade-analysis workflow (`corpus-systemic-blockers`) that inventoried every
+failing file's *full* blocker set, ranked root causes by cascade-per-effort, and
+produced verified implementation plans. Key finding (overturns the usual
+assumption): the **testworks harness is NOT the dominant gate** — `define test/
+suite/benchmark` and the high-frequency `check-equal/check-true/assert-equal`
+already work, so most files fail on genuine downstream feature gaps. Then
+executed the top cheap/high-cascade fixes, each verified (in-tree 55/55 both
+paths, smoke-aot 6/6, AOT build+run for runtime changes), committed, pushed:
+
+- **`define interface-specification-suite`** (macro, +4): testworks MOP-
+  conformance definer → no-op nullary function (discards spec body). Flipped the
+  4 corpus spec suites + 2 lib specs.
+- **for-statement closure lift + free-var pass** (+1, semaphores): the lift and
+  capture-analysis passes had no-op `Statement::For` arms, so a method inside a
+  for body never lifted and a capture used in a for clause/body went undetected.
+  Eliminates "anonymous method survived the lift pre-pass" corpus-wide.
+- **float constants** (+3, transcendentals + 2 fft-tests): `STDLIB_CONSTANTS`
+  was integer-only; added `STDLIB_FLOAT_CONSTANTS` + `lookup_float_constant` and
+  the four `$single-pi/$double-pi/$single-e/$double-e`.
+- **second-tier testworks helpers** (+1): `check-instance?`/`assert-instance?`/
+  `assert-false`/`test-output` functions; `check-condition`/`assert-signals`/
+  `check-no-errors`/`check-no-condition`/`assert-no-errors` as eager FUNCTION
+  stubs (the faithful `block…exception` macros can't be written — the macro
+  engine won't match a multi-fragment arg in a comma-separated call pattern;
+  see known-limitations).
+- **mixed int/float arithmetic coercion** (+1, fft): `PrimOp::IntToFloat`
+  (untag fixnum → sitofp) + BinOp-arm coercion of the integer operand.
+
+Investigated but **deferred** (findings in known-limitations):
+- **locators class hierarchy** (+3 verified on `--parse-with-rust`) — reverted:
+  adding ~35 stdlib classes shifts FIRST_USER ids and breaks the self-hosting
+  `--parse-with-dylan` shim build (class-id drift). Needs a reserved id band.
+- **make/instance? on a non-literal class value** (Tier A) — planned (route a
+  class-in-binding through a tag-stripping `nod_make_dynamic`/instance?); also
+  fixes a silent-#f `instance?` miscompile. Real capability, +1 + advances ~7.
+- **macro-engine multi-fragment call-arg matching** — gateway affecting ~11
+  files (the testworks condition macros, `with-pretty-print-to-string`, …).
+- **multifile same-module runner** (+9 dump-dfm) — the bit-vector cluster has no
+  feature gap; needs a per-library-context corpus runner (`.lid` `Files:` lists)
+  + an honest metric note.
 
 ### 2026-06-16 — Session: parse/lower edge-cases, stdlib macros, multi-file compile
 
