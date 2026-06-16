@@ -170,6 +170,23 @@ define macro with-cleanup
     => { block () ?body cleanup ?cleanup end }
 end macro;
 
+// ─── with-/without-bounds-checks macros ──────────────────────────────────────
+//
+// Element bounds-check control. In stock Dylan these are optimization hints
+// that elide (or force) array/vector bounds checks for the enclosed body. We
+// don't currently elide checks, so both forms simply run the body. Defining
+// them as macros also teaches the parser the `NAME … end` statement shape.
+//
+//   without-bounds-checks v[i] := x end   ⟹   begin v[i] := x end
+//
+define macro without-bounds-checks
+  { without-bounds-checks ?body:body end } => { begin ?body end }
+end macro;
+
+define macro with-bounds-checks
+  { with-bounds-checks ?body:body end } => { begin ?body end }
+end macro;
+
 // ─── inc! / dec! macros ──────────────────────────────────────────────────────
 //
 // In-place increment / decrement of a place expression, sugar over the

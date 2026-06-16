@@ -3106,6 +3106,25 @@ impl<'a> Parser<'a> {
                 self.bump();
             }
         }
+        // No-`end` declaration form terminated by `;`, e.g.
+        // `define sealed domain make (singleton(<node>));` — a sealing
+        // declaration with an optional head but no body and no `end`. Without
+        // this, the body-to-`end` capture below would devour later forms
+        // hunting for a non-existent `end`.
+        if matches!(self.peek_kind(), TokenKind::Semicolon) {
+            let end_span = self
+                .tokens
+                .get(self.pos.saturating_sub(1))
+                .map(|t| t.span)
+                .unwrap_or(define_tok.span);
+            return Ok(Item::DefineOther {
+                span: join(define_tok.span, end_span),
+                modifiers,
+                keyword,
+                name,
+                body_fragments: Vec::new(),
+            });
+        }
         // No-`end` assignment shorthand: `define <word> NAME = EXPR ;`
         // (e.g. `define benchmark takr = testtakr;`). There is no `end` for
         // this form — capture `= EXPR` as the body fragments (a macro for the
