@@ -4154,7 +4154,14 @@ fn register_class(
     // `register_simple_user_class`).
     let mut own_slots: Vec<SlotInfo> = Vec::with_capacity(slots.len());
     for slot in slots {
-        if slot.allocation != nod_reader::SlotAllocation::Instance {
+        // `constant slot` is ordinary instance storage with a getter but no
+        // setter — lower it like `instance:` and force `has_setter = false`
+        // below. Class/each-subclass/virtual allocation remain unsupported.
+        let is_constant_slot =
+            slot.allocation == nod_reader::SlotAllocation::Constant;
+        if slot.allocation != nod_reader::SlotAllocation::Instance
+            && !is_constant_slot
+        {
             return Err(LoweringError::UnsupportedSlotAllocation {
                 span: slot.span,
                 class_name: name.to_string(),
@@ -4185,7 +4192,11 @@ fn register_class(
             }
             _ => SlotDefault::Unbound,
         };
-        let has_setter = slot.setter.unwrap_or(true);
+        let has_setter = if is_constant_slot {
+            false
+        } else {
+            slot.setter.unwrap_or(true)
+        };
         own_slots.push(SlotInfo {
             name: slot.name.clone(),
             offset: 0, // patched by registration helper.
