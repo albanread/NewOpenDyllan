@@ -12,7 +12,7 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 79 / 161 | … → 74 (testworks keyword-head) → 75 (no-`end` definer) → 76 (multi-method `local`) → 77 (constant slots) → 78 (unknown adjectives + `define domain`) → 79 (with-lock/timing/dynamic-bind macros) |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 81 / 161 | … → 74 (testworks keyword-head) → 75 (no-`end` definer) → 76 (multi-method `local`) → 77 (constant slots) → 78 (unknown adjectives + `define domain`) → 79 (with-lock/timing/dynamic-bind macros) → 81 (profiling macro) |
 | OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
@@ -57,6 +57,33 @@ the fix is general, not file-specific), re-measure, commit.
   unchanged (79) because per-file errors in other library files still dominate
   whole-library compiles; pays off once the support files compile. `.lid` file
   lists give the true library groupings (per-`.lid` counter in `/tmp/cc-lid.sh`).
+- **`^` (integer exponentiation)** operator: `nod_op_pow` runtime shim + lower
+  `a ^ b` to a `DirectCall` on it; registered in the codegen symbol table, JIT
+  map, and as a `^` function ref. AOT-verified (`2 ^ 10` = 1024, `3 ^ 4` = 81).
+- **`for … in coll, while:/until: T`** scoping fix: the `in`-clause variable was
+  out of scope for the user end-test (conjoined into the loop head before
+  `head_lets` bound it). Now user tests are wrapped in a `begin let var =
+  current-element(state); … T end`; `&` short-circuits after `~fip-finished?`,
+  current-element is an idempotent read. AOT-verified loop termination.
+- **`for … in coll using PROTOCOL`** now parses (protocol parsed + ignored — we
+  iterate forward only; documented).
+- **`profiling (metrics…) body results … end`** stdlib macro (run body, bind
+  metrics to 0). Flipped profiling-tests + benchmark-closure (→ 81).
+
+Findings logged for later (not quick per-file wins):
+- **Case-insensitive identifiers** (DRM): takl.dylan defines `*L18*` but uses
+  `*l18*`; our resolver is case-sensitive so it's "undefined ident". Real
+  correctness gap; deep change (case-fold every name table) → deferred.
+- **Definer-macro name used as an identifier**: cl-stubs has a `#key test`
+  parameter; the expander treats `test(...)` as a call to the `define test`
+  macro ("matched none of its 2 rules"). `test`/`suite`/`benchmark` are
+  definition macros and shouldn't intercept call/identifier positions — a macro
+  hygiene/classification gap.
+- The remaining single-error corpus files are mostly deep subsystems: the
+  io/file-stream library (`with-open-file`, `<file-stream>`), machine-words,
+  locators, transcendentals (`$single-pi`), and cross-file/library refs
+  (`<bit-set>`, `$tiny-size` — now compilable via multi-file, blocked on the
+  library's other files).
 
 *(newest first)*
 
