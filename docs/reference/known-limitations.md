@@ -240,30 +240,32 @@ or a standing design trade-off are kept here.
 * **Scope**: medium (macro engine).
 * **Status**: open (functions ship as eager stubs meanwhile).
 
-## Adding stdlib classes shifts class-ids and breaks the self-hosting parser shim
+## Adding stdlib classes shifts class-ids — LARGELY RESOLVED (2026-06-16, STEP 0-1)
 
-* **Symptom**: adding new `define class` registrations to a `stdlib/*.dylan`
-  file (e.g. a `stdlib/locators.dylan` with ~35 locator/URL classes) makes the
-  `--parse-with-dylan` path (the default `dump-dfm`, self-hosting Dylan-in-Dylan
-  parser) panic during the cached `dylan-parser.exe` (re)build with
-  `nod_aot_register_user_class: class id drift — compiler expected N for class
-  X, but already registered at M`. Regular AOT (`tools/smoke-aot.sh`) and the
-  `--parse-with-rust` path are unaffected.
-* **Cause**: the shim's own classes (`<token>`, `<ast-*>`, …) are minted at
-  FIRST_USER ids AFTER the stdlib classes. Adding stdlib classes shifts those
-  ids; the shim build's AOT-registration replay sequence then diverges from the
-  compile-time id assignment and trips the drift assert in
-  `src/nod-runtime/src/aot.rs`.
-* **Impact**: blocks shipping new library class hierarchies as stdlib `define
-  class`es — e.g. the locators library (`<file-locator>`/`<directory-locator>`/
-  `<url>`/…) that would flip system/tests/{temp-files,regressions} and
-  io/tests/temp-files (verified +3 on the `--parse-with-rust` corpus before the
-  shim drift forced a revert).
-* **Planned fix**: give late stdlib class additions a reserved id band (like the
-  `set_shim_class_band_active` mechanism) so they don't shift the shim's ids, or
-  make the shim build's AOT registration order-independent.
-* **Scope**: medium–large (self-hosting AOT class-id allocation).
-* **Status**: open; locators deferred until this is solved.
+* **Was**: adding `define class`es to `stdlib/*.dylan` renumbered the whole
+  `FIRST_USER..` id sequence (a monotonic counter shared by library + user
+  classes), drifting every baked artifact — most visibly crashing the
+  `--parse-with-dylan` shim with `nod_aot_register_user_class: class id drift`.
+  Each prior fix (the `FIRST_SHIM` band, shim cache-invalidation) patched one
+  baker, so the next stdlib class brought it back.
+* **Root cause**: a library class's id was a function of *registration order*
+  (`1024 + count-before-it`), not its identity.
+* **Fix (STEP 0-1)**: library-class ids are now name-keyed via an append-only
+  pin table (`src/nod-runtime/src/class_pins.rs`), consulted at the mint funnel
+  (`allocate_user_class_id_named`); user classes allocate above `PIN_CEILING`.
+  Adding a stdlib class appends one pin row and **moves no existing id**, so the
+  shim no longer drifts (proven: a throwaway stdlib class no longer crashes the
+  shim). The `class_pin_stability` test fails if a new library class isn't
+  pinned. Zero-diff: reproduces today's exact ids.
+* **Remaining (STEP 3, deferred)**: `PIN_CEILING` still equals max-pin+1, so
+  adding a library class shifts the user-band base by the number of new classes
+  — which reblesses in-tree dump fixtures that bake a *user*-class id (a
+  controlled, non-crashing diff, not the old shim crash). A reserved user-band
+  gap (raise `PIN_CEILING` to a fixed high reserve, one-time rebless) makes
+  library additions need no rebless at all. STEP 2/4: fold the pin hash into the
+  shim cache key and pin the shim's own classes.
+* **Status**: shim-crash class of drift RESOLVED; library classes (locators,
+  `<machine-word>`, `<unicode-string>`, `<bit-set>`) are now addable.
 
 ## An unhandled signalled condition panics the JIT eval engine
 
