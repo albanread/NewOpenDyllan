@@ -9,6 +9,24 @@ servers, file-system *locators*. We target the portable language + core stdlib.
 Effort key: **S** ≈ a day or two · **M** ≈ a week · **L** ≈ 2–4 weeks · **XL** ≈ months.
 "Unlocks" = rough corpus files freed (single-file `dump-dfm`), where measurable.
 
+> **Implementation principle — macros first.** When a feature *can* be a Dylan
+> macro in `stdlib/macros.dylan` (expanding over primitive special forms +
+> runtime primitives), do that instead of growing the Rust parser/lowerer. Keep
+> the Rust core to primitives + the macro engine; grow the surface in Dylan.
+> Non-macro work (must stay in Rust): lexer/parser primitives, `#key`/`#rest`
+> binding, dispatch, GC, codegen, FFI, and the runtime primitives macros expand
+> onto. Items below are tagged **[macro]**, **[rust]**, or **[mixed]**.
+
+> **Recon notes (2026-06-16, corrected stale audit):** `select`/`case`/`when`/
+> `unless`/`cond`/`when-let`/`if-let`/`iterate` already work (parser desugar or
+> existing macros). `handler-case`/`handler-bind` as *forms* have **0** corpus
+> uses — the condition tests use the `block … exception …` primitive directly
+> (79 files), which works — so don't bother macro-izing them for the corpus.
+> A recurring real gap: operator function-refs in **call** position
+> (`\=(a,b)`, `select … by \=`, `disjoin(\>)`) lower to an unresolved
+> `DirectCall` and also miss `<=`/`>=` shims — a small **[rust]** lower_call fix
+> (route `\op(args)` to the inline op / shim funcall). Belongs in Tier 1.
+
 Status snapshot (audit): language-core ~65–70%, full platform ~40%. GC correct
 as of 2026-06-15. Corpus compile 74/161.
 
