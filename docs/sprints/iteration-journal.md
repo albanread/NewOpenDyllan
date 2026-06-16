@@ -12,7 +12,7 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 93 / 161 | … → 79 (macros) → 81 (profiling) → 82 (definer-macro hygiene) → 83 (`subtype?`) → 87 (interface-specification-suite) → 88 (for-stmt closure lift) → 91 (float constants) → 92 (testworks 2nd-tier helpers) → 93 (mixed int/float coercion) |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 95 / 161 | … → 83 (`subtype?`) → 87 (interface-specification-suite) → 88 (for-stmt closure lift) → 91 (float constants) → 92 (testworks 2nd-tier helpers) → 93 (mixed int/float coercion) → 95 (make/instance? on a non-literal class value) |
 | OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
@@ -49,8 +49,30 @@ paths, smoke-aot 6/6, AOT build+run for runtime changes), committed, pushed:
   see known-limitations).
 - **mixed int/float arithmetic coercion** (+1, fft): `PrimOp::IntToFloat`
   (untag fixnum → sitofp) + BinOp-arm coercion of the integer operand.
+- **make/instance? on a non-literal class value** (+2, condition-test-utilities
+  + 1): a class held in a binding/expression is a first-class runtime type, but
+  `make` raised undefined-ident and `instance?` silently codegened to `#f` (a
+  miscompile). `make(class-value, …)` now strips the class Word's pointer tag
+  (new `PrimOp::StripTag`) and reuses `%make`; `instance?(v, class-value)` calls
+  `nod_instance_p` (reads the id from the tagged Word). AOT-verified end-to-end
+  (construct via a class param; CPL-walk `instance?`; `instance?(5, c)`→#f).
+  Simpler than the original plan's `nod_make_dynamic` (no 18-arg shim). Removed a
+  co-blocker from ~7 more files (limited-types / `<unicode-string>` still gate
+  them). This is Tier A only; `limited(...)`/`singleton(...)` as types is Tier B.
 
-Investigated but **deferred** (findings in known-limitations):
+Investigated but **deferred** (findings in known-limitations / journal):
+- **class-id-drift** blocks all stdlib *class* additions (locators,
+  `<machine-word>`, `<unicode-string>`, `<bit-set>`, `<application-process>` —
+  a large chunk of the remaining "undefined ident" failures are library
+  classes). A shim-band counter exists (`set_shim_class_band_active`) but is only
+  active for `--library` builds, not the self-hosting parser-shim's own EXE
+  build, so adding stdlib classes shifts ids and crashes the shim. This is the
+  single biggest remaining lever; needs a dedicated self-hosting-AOT session.
+- **macro-engine multi-fragment call-arg matching** — gateway (~11 files); the
+  matcher binds one fragment per comma slot. Subtle (single-arg multi-fragment
+  already works), risky to the byte-stable expansion gate; needs careful study.
+- **`#rest` in `let`** (control), **`type-for-copy`/`push`/`as`** stdlib fns —
+  bounded co-blockers for a later pass.
 - **locators class hierarchy** (+3 verified on `--parse-with-rust`) — reverted:
   adding ~35 stdlib classes shifts FIRST_USER ids and breaks the self-hosting
   `--parse-with-dylan` shim build (class-id drift). Needs a reserved id band.
