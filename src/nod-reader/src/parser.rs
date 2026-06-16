@@ -1677,6 +1677,15 @@ impl<'a> Parser<'a> {
             let body = self.parse_stmt_body()?;
             let end_tok = self.expect(TokenKind::KwEnd, "`end` for local method")?;
             self.consume_optional_kw("method");
+            // Optional method-name echo: `end method go-c`. Without consuming
+            // it, a comma-separated `local method go-c () … end method go-c,
+            // method go-d () … end` sequence would leave `go-c` (then `,`)
+            // unconsumed and mis-parse the second method.
+            if matches!(self.peek_kind(), TokenKind::Ident)
+                && self.token_text(self.peek()) == name.as_str()
+            {
+                self.bump();
+            }
             let span = join(name_tok.span, end_tok.span);
             out.push(LocalMethodDecl {
                 span,
