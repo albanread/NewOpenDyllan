@@ -9334,6 +9334,15 @@ fn desugar_numeric_for(
     // parallel assignments).
     let mut lets: Vec<Statement> = Vec::new();
     let mut tests: Vec<Expr> = Vec::new();
+    // `while:`/`until:` end-tests are kept separate from the structural tests
+    // (numeric bounds, `~fip-finished?`). A user test may reference an
+    // `in`-clause variable, which is only bound at the TOP of the body
+    // (`head_lets`) — AFTER the structural continuation test runs in the loop
+    // head. So we bind the `in`-variables in the loop head too, by wrapping the
+    // user test in a `begin let var = current-element(state); … TEST end`. Each
+    // `in`-clause records its (var, current-element) here for that wrapper.
+    let mut user_tests: Vec<Expr> = Vec::new();
+    let mut in_elem_bindings: Vec<(String, Expr)> = Vec::new();
     let mut next_temps: Vec<Statement> = Vec::new();
     let mut assigns: Vec<Statement> = Vec::new();
 
@@ -9454,11 +9463,11 @@ fn desugar_numeric_for(
             }
             ForClause::While { cond, .. } => {
                 // `while: T` — loop while T holds.
-                tests.push(cond.clone());
+                user_tests.push(cond.clone());
             }
             ForClause::Until { cond, .. } => {
                 // `until: T` — loop while ~T holds.
-                tests.push(Expr::UnOp {
+                user_tests.push(Expr::UnOp {
                     span,
                     op: UnOp::Not,
                     operand: Box::new(cond.clone()),
@@ -9497,12 +9506,16 @@ fn desugar_numeric_for(
                 });
 
                 // Top of iteration: let var = %fip-current-element(%state).
+                let elem = fip_call(span, "%fip-current-element", state_ident.clone());
                 head_lets.push(Statement::Let {
                     span,
                     binders: vec![Binder { span, name: var.clone(), type_: None }],
                     rest: None,
-                    value: fip_call(span, "%fip-current-element", state_ident.clone()),
+                    value: elem.clone(),
                 });
+                // Record (var, current-element) so a `while:`/`until:` test that
+                // references `var` can bind it in the loop head (see assembly).
+                in_elem_bindings.push((var.clone(), elem));
 
                 // End of iteration: %fip-advance!(%state). Advancing the
                 // state is independent of the loop variables, so it joins
@@ -9522,19 +9535,57 @@ fn desugar_numeric_for(
         }
     }
 
-    // The loop condition is the conjunction of all tests. With no test at
-    // all the loop never terminates — reject (matches the old "needs
-    // to/below/above" guard for the pure-numeric case, but now satisfied
-    // by any `to`/`below`/`above`/`while:`/`until:`).
-    let cond = match conjoin(span, tests) {
-        Some(c) => c,
-        None => return Err(bail("loop has no termination test (need `to`/`below`/`above`/`while:`/`until:`)")),
+    // With no test at all the loop never terminates — reject (matches the
+    // old "needs to/below/above" guard, now also satisfied by any
+    // `while:`/`until:` user test).
+    if tests.is_empty() && user_tests.is_empty() {
+        return Err(bail(
+            "loop has no termination test (need `to`/`below`/`above`/`while:`/`until:`)",
+        ));
+    }
+
+    // The loop condition is `structural & user`. `structural` is the
+    // conjunction of numeric bounds and `~fip-finished?` checks; `user` is the
+    // conjunction of `while:`/`until:` tests. A user test may reference an
+    // `in`-clause variable, so we bind those variables (to the current element)
+    // in a `begin` wrapper around the user test. Because `&` is short-circuit
+    // and the `~fip-finished?` structural test runs first, `%fip-current-element`
+    // is only evaluated when there genuinely is a current element. It's an
+    // idempotent read (no advance), so binding it both here and in `head_lets`
+    // is safe.
+    let structural = conjoin(span, tests);
+    let user = conjoin(span, user_tests).map(|u| {
+        if in_elem_bindings.is_empty() {
+            u
+        } else {
+            let mut begin_body: Vec<Expr> = in_elem_bindings
+                .iter()
+                .map(|(var, elem)| Expr::Let {
+                    span,
+                    binder: var.clone(),
+                    value: Box::new(elem.clone()),
+                })
+                .collect();
+            begin_body.push(u);
+            Expr::Begin { span, body: begin_body }
+        }
+    });
+    let cond = match (structural, user) {
+        (Some(s), Some(u)) => Expr::BinOp {
+            span,
+            op: BinOp::And,
+            lhs: Box::new(s),
+            rhs: Box::new(u),
+        },
+        (Some(s), None) => s,
+        (None, Some(u)) => u,
+        (None, None) => unreachable!("checked non-empty above"),
     };
 
-    // Loop body = `in`-clause element rebindings (top of iteration), then
-    // the user body, then the parallel next-value temps, then the
-    // assignments back to the iteration variables (which include each
-    // in-clause's `%fip-advance!`).
+    // Loop body = `in`-clause element rebindings (top of iteration), then the
+    // user body, then the parallel next-value temps, then the assignments back
+    // to the iteration variables (which include each in-clause's
+    // `%fip-advance!`).
     let mut while_body: Vec<Statement> = head_lets;
     while_body.extend(body.iter().cloned());
     while_body.extend(next_temps);
