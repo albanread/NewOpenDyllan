@@ -40,7 +40,9 @@ as of 2026-06-15. Corpus compile 83/161 (per-file).
   folding, keyword-symbol in value position. Buckets: the 16 parse failures.
 - **1b. `select` lowering — S.** Parsed but stubbed; lower to the same
   decision-tree path `case` already uses.
-- **1c. Tractable stdlib fns — S/M.** `subtype?` (6 refs; needs CPL access),
+- **1c. Tractable stdlib fns — S/M.** ~~`subtype?` (6 refs; needs CPL access)~~
+  **done (2026-06-16)** — `nod_subtype_p` shim + `%subtype?` primitive +
+  stdlib `subtype?`. Remaining:
   `push`/`push-last`/`pop` on `<deque>`/`<stretchy-vector>`, `as` (coercion),
   `type-for-copy`, and the arg-root-coverage gaps in `reduce`/`map`/`do`/
   `concatenate` flagged by the audit.
@@ -68,7 +70,7 @@ bit-vector cluster compiles clean as a unit; the files fail individually). The
 **Remaining:** the per-library pass count is still low because one buggy file in
 a library (a `*-utilities` / harness file using an unsupported feature) poisons
 the whole-library compile. So the headline metric stays per-file (79) until the
-support files in each library compile cleanly — which is the Tier 4–6 long tail,
+support files in each library compile cleanly (currently 83/161) — which is the Tier 4–6 long tail,
 not a Tier 3 problem. Net: the cross-file *plumbing* is done; the unlock now
 depends on grinding the remaining per-file errors *within* each library. (Full
 *cross*-library separate compilation + module encapsulation enforcement is
