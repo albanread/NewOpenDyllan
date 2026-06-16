@@ -476,6 +476,27 @@ define macro suite
     => { define function ?name () #f end }
 end macro;
 
+// ─── interface-specification-suite macro ─────────────────────────────────────
+//
+// testworks' MOP-conformance definer:
+//   define interface-specification-suite NAME ()
+//     variable foo :: <integer>;
+//     function odd? (<integer>) => (<boolean>);
+//     sealed class <number> (<object>);
+//     ...
+//   end
+// It enumerates a library's exported bindings to check they exist with the
+// right shapes. We have no conformance runner, so (like `suite`) discard the
+// spec body and emit a no-op nullary function. `?body:body` swallows the
+// declaration clauses at the fragment level, so their forward references
+// (<unicode-string>, <thread-error>, …) never reach the resolver.
+define macro interface-specification-suite
+  { define interface-specification-suite ?name:name () ?body:body end }
+    => { define function ?name () #f end }
+  { define interface-specification-suite ?name:name ?body:body end }
+    => { define function ?name () #f end }
+end macro;
+
 // ─── iterate macro ───────────────────────────────────────────────────────────
 //
 // Dylan's named-let loop. `iterate NAME (v1 = i1, v2 = i2, …) BODY end`
