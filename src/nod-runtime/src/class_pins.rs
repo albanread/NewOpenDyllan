@@ -119,12 +119,46 @@ pub const CLASS_PINS: &[(&str, u32)] = &[
     ("<double-float-vector>", 1125),
     ("<stream>", 1126),
     ("<string-stream>", 1127),
+    ("<locator>", 1128),
+    ("<physical-locator>", 1129),
+    ("<server-locator>", 1130),
+    ("<web-locator>", 1131),
+    ("<file-system-locator>", 1132),
+    ("<directory-locator>", 1133),
+    ("<file-locator>", 1134),
+    ("<file-system-directory-locator>", 1135),
+    ("<file-system-file-locator>", 1136),
+    ("<posix-file-system-locator>", 1137),
+    ("<posix-directory-locator>", 1138),
+    ("<posix-file-locator>", 1139),
+    ("<native-file-system-locator>", 1140),
+    ("<native-directory-locator>", 1141),
+    ("<native-file-locator>", 1142),
+    ("<microsoft-file-system-locator>", 1143),
+    ("<microsoft-directory-locator>", 1144),
+    ("<microsoft-file-locator>", 1145),
+    ("<microsoft-volume-locator>", 1146),
+    ("<microsoft-unc-locator>", 1147),
+    ("<microsoft-server-locator>", 1148),
+    ("<url>", 1149),
+    ("<server-url>", 1150),
+    ("<directory-url>", 1151),
+    ("<file-url>", 1152),
+    ("<file-index-url>", 1153),
+    ("<cgi-url>", 1154),
+    ("<mail-to-locator>", 1155),
+    ("<http-server>", 1156),
+    ("<https-server>", 1157),
+    ("<ftp-server>", 1158),
+    ("<file-server>", 1159),
+    ("<pathname>", 1160),
+    ("<locator-error>", 1161),
 ];
 
 /// One past the highest pinned id — the base of the per-program USER class
 /// band. User (`define class`) ids allocate from here, so they do not
 /// depend on the count of pinned library classes.
-pub const PIN_CEILING: u32 = 1128;
+pub const PIN_CEILING: u32 = 1162;
 
 /// Look up a library class's pinned id by name.
 pub fn pinned_id(name: &str) -> Option<u32> {

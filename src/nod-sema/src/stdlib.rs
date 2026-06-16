@@ -130,6 +130,10 @@ const STDLIB_FILES: &[(&str, &str)] = &[
         include_str!("../../../stdlib/system-classes.dylan"),
     ),
     (
+        "stdlib/locators.dylan",
+        include_str!("../../../stdlib/locators.dylan"),
+    ),
+    (
         "stdlib/strings.dylan",
         include_str!("../../../stdlib/strings.dylan"),
     ),
