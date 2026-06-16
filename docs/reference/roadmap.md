@@ -28,7 +28,7 @@ Effort key: **S** ≈ a day or two · **M** ≈ a week · **L** ≈ 2–4 weeks 
 > (route `\op(args)` to the inline op / shim funcall). Belongs in Tier 1.
 
 Status snapshot (audit): language-core ~65–70%, full platform ~40%. GC correct
-as of 2026-06-15. Corpus compile 95/161 (per-file).
+as of 2026-06-15. Corpus compile 101/161 (per-file).
 
 ---
 

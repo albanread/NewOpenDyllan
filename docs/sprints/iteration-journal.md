@@ -12,12 +12,48 @@ DUIM) → re-run → on a pass, record it here and keep going. Verify no regress
 |--------|-------|-------|
 | In-tree fixtures (`dump-ast`/`dump-dfm`) | 55 / 55 | regression guard — must stay green |
 | OpenDylan corpus parse (`dump-ast`) | 150 / 161 | language + stdlib suites (DUIM/etc. excluded); 101 at session start |
-| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 95 / 161 | … → 83 (`subtype?`) → 87 (interface-specification-suite) → 88 (for-stmt closure lift) → 91 (float constants) → 92 (testworks 2nd-tier helpers) → 93 (mixed int/float coercion) → 95 (make/instance? on a non-literal class value) |
+| OpenDylan corpus compile (`dump-dfm`, `--parse-with-rust`) | 101 / 161 | … → 91 (float constants) → 92 (testworks 2nd-tier) → 93 (mixed int/float) → 95 (make/instance? non-literal class) → 98 (locators library) → 101 (`<machine-word>`/`<bit-set>`/`<unicode-string>`) |
 | OpenDylan corpus build/run | self-contained programs build + run | `tak`/`benchmark`/`define test` → `.exe`, correct results |
 | Macro engine | definition macros ✅ | first one (`benchmark`) builds+runs; was: only body/call macros |
 | Evidence | `tak`/`benchmark` build to `.exe` and run | pure benchmark computation compiles + runs correctly (=7) |
 
 ## Iterations
+
+### 2026-06-16 — Lasting class-id fix + library-class cash-in, corpus 95 → 101
+
+Tackled the *recurring* class-id drift at the root (a second workflow:
+`class-id-stability-design`, 9 agents, mapped every baker of the order-based id
+sequence + 3 design proposals + adversarial synthesis).
+
+**Root cause**: a library class's id was `FIRST_USER + registration-order`, in a
+band shared with user classes — so any stdlib class add/remove/reorder
+renumbered the sequence and drifted every baked artifact (AOT EXEs, the cached
+parser shim, dump snapshots). Prior fixes (`FIRST_SHIM` band, shim cache
+invalidation) each patched one baker, so it kept coming back.
+
+**Fix (STEP 0-1)**: ids are now name-keyed. `src/nod-runtime/src/class_pins.rs`
+is an append-only name→id pin table for all library classes; the mint funnel
+(`allocate_user_class_id_named`) returns the pinned id for a library class and
+allocates user classes above `PIN_CEILING`. Adding a stdlib class appends one
+row and moves no existing id. Zero-diff (reproduces today's exact ids); the
+`class_pin_stability` test fails if a new library class isn't pinned. PROVEN:
+adding a throwaway stdlib class no longer crashes the `--parse-with-dylan` shim
+(the exact locators failure mode). No golden bakes a user-band id, so library
+additions are even rebless-free — STEP 3 (reserved user band) proved unnecessary
+for the gate.
+
+**Cash-in (the payoff)**: with the drift gone, the previously-blocked library
+classes went in cleanly:
+- `stdlib/locators.dylan` — 34 locator/URL/server classes → +3
+  (system/tests/temp-files, io/tests/temp-files, system/tests/regressions).
+- `<machine-word>`, `<bit-set>`, `<unicode-string>` → +3 (format-tests,
+  machine-words, bit-set-tests).
+Each was a one-line-per-class pin append; in-tree 55/55, smoke-aot 6/6, dump
+tests all green with zero rebless.
+
+Remaining (next): `#rest`-in-`let` multiple-value-bind (control, regressions —
+needs a rest-collect-into-SOV helper); the bit-vector cross-file `$tiny-size`
+cluster (multifile metric); frpoly mutually-recursive local-method lift.
 
 ### 2026-06-16 — Systemic-blocker push (workflow-driven), corpus 83 → 93
 
